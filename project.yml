@@ -11,7 +11,7 @@ settings:
   base:
     DEVELOPMENT_TEAM: X632M62W9H
     SWIFT_VERSION: "6.0"
-    MARKETING_VERSION: "0.1.0"
+    MARKETING_VERSION: "1.0"
     CURRENT_PROJECT_VERSION: "2"
 targets:
   Oxide:
@@ -24,6 +24,8 @@ targets:
       path: Oxide/Info.plist
       properties:
         CFBundleDisplayName: Oxide
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         UILaunchScreen: {}
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false
