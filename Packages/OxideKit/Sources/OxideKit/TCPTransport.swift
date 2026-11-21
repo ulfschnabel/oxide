@@ -54,6 +54,12 @@ public final class TCPTransport: Transport, @unchecked Sendable {
         try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { (done: CheckedContinuation<Void, Error>) in
                 let once = Once()
+                // Cancelled before the handler below exists: no state change
+                // would ever reach it.
+                if Task.isCancelled {
+                    once.run { done.resume(throwing: CancellationError()) }
+                    return
+                }
                 let queue = queue
                 let permissionDeadline = Once()
                 connection.stateUpdateHandler = { state in

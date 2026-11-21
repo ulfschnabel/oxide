@@ -14,14 +14,40 @@ final class Diagnostics {
     private init() {
         let text = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
         buffer = LogBuffer(text: text, capacity: 600)
+        // Don't lose the last second's lines when the app is suspended.
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.saveNow() }
+        }
     }
+
+    private func saveNow() {
+        guard saveTask != nil else { return }
+        saveTask?.cancel()
+        save()
+    }
+
+    private var saveTask: Task<Void, Never>?
 
     func log(_ message: String) {
         buffer.append(message, at: .now)
+        // Saved at most once a second, so a burst of lines costs one write.
+        guard saveTask == nil else { return }
+        saveTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(1))
+            self?.save()
+        }
+    }
+
+    private func save() {
+        saveTask = nil
         try? buffer.text().write(to: url, atomically: true, encoding: .utf8)
     }
 
     func clear() {
+        saveTask?.cancel()
+        saveTask = nil
         buffer.removeAll()
         try? FileManager.default.removeItem(at: url)
     }
@@ -55,6 +81,15 @@ struct DiagnosticsView: View {
                 .padding()
         }
         .defaultScrollAnchor(.bottom)
+        .safeAreaInset(edge: .bottom) {
+            Text("Includes your computers' names and addresses, never passwords. Share it with whoever helps you troubleshoot.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal)
+                .padding(.vertical, 8)
+                .frame(maxWidth: .infinity)
+                .background(.bar)
+        }
         .navigationTitle("Diagnostics")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {

@@ -43,6 +43,7 @@ final class RemoteConnection {
     private let session: Session
     private var resolution = ResolutionController()
     private var screen: (size: CGSize, scale: CGFloat)?
+    private var loggedScreen: (size: CGSize, scale: CGFloat)?
     private var resolutionWork: Task<Void, Never>?
     private var builder: VideoSampleBuilder?
     private var login: CheckedContinuation<Void, Error>?
@@ -202,7 +203,6 @@ final class RemoteConnection {
     /// The window's size changed (connect, rotate, fold, Split View).
     func screenChanged(size: CGSize, scale: CGFloat) {
         guard size != screen?.size || scale != screen?.scale else { return }
-        diag("window \(Int(size.width))×\(Int(size.height)) pt @\(scale)x")
         screen = (size, scale)
         // Rotating and folding pass through intermediate sizes, and each change
         // stalls the stream while the host rebuilds its encoder.
@@ -233,6 +233,11 @@ final class RemoteConnection {
             return
         }
         guard let screen else { return }
+        // Logged here, after the debounce: a live resize passes many sizes.
+        if loggedScreen?.size != screen.size || loggedScreen?.scale != screen.scale {
+            loggedScreen = screen
+            diag("window \(Int(screen.size.width))×\(Int(screen.size.height)) pt @\(screen.scale)x")
+        }
         let textSize = TextSize(rawValue: defaults.string(forKey: SettingsKey.textSize) ?? "") ?? .balanced
         let factor = textSize.factor(screenScale: screen.scale)
         let target = Mode(Int((screen.size.width * factor).rounded()), Int((screen.size.height * factor).rounded()))
