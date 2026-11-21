@@ -229,12 +229,14 @@ struct HomeView: View {
             case .failure(is CancellationError):
                 break
             case .failure(let error):
+                diag("shown to the user: \(error.localizedDescription)")
                 failure = Failure(host: host, message: error.localizedDescription)
             }
         }
     }
 
     private func cancel() {
+        if attempt != nil { diag("connect cancelled") }
         connectTask?.cancel()
         connectTask = nil
         attempt = nil

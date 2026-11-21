@@ -94,6 +94,11 @@ struct SettingsView: View {
                     } label: {
                         Label("Gestures & keyboard", systemImage: "questionmark.circle")
                     }
+                    NavigationLink {
+                        DiagnosticsView()
+                    } label: {
+                        Label("Diagnostics", systemImage: "stethoscope")
+                    }
                 }
 
                 Section {

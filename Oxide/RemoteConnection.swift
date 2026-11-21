@@ -66,14 +66,22 @@ final class RemoteConnection {
     /// running when it throws.
     static func open(host: String, password: String) async throws -> RemoteConnection {
         guard let address = HostAddress(host) else { throw ConnectError.address }
+        diag("connect \(address.host):\(address.port)")
         let transport = TCPTransport(host: address.host, port: address.port)
-        try await transport.connect()
+        do {
+            try await transport.connect()
+        } catch {
+            diag("connect failed: \(error.localizedDescription)")
+            throw error
+        }
+        diag("tcp connected, logging in")
         let session = Session(transport: transport, host: host, password: password,
                               clientName: UIDevice.current.name)
         let connection = RemoteConnection(host: host, session: session)
         let timeout = Task { @MainActor [weak connection] in
             try? await Task.sleep(for: loginTimeout)
             guard !Task.isCancelled else { return }
+            diag("login timed out")
             connection?.abortLogin(ConnectError.timedOut)
         }
         defer { timeout.cancel() }
@@ -131,12 +139,16 @@ final class RemoteConnection {
                                   original: d.hasOriginalResolution ? Mode(d.originalResolution) : nil,
                                   modes: peer.resolutions.resolutions.map(Mode.init))
             }
+            let shown = peer.displays.indices.contains(i)
+                ? "\(peer.displays[i].width)×\(peer.displays[i].height) scale \(peer.displays[i].scale)" : "?"
+            diag("logged in: \(peer.platform) \(peer.version), display \(i) of \(peer.displays.count) \(shown), \(peer.resolutions.resolutions.count) modes")
             finishLogin(.success(()))
             scheduleResolution(after: .zero)
         case .switchDisplay(let s):
             guard s.display == peer.currentDisplay else { break }
             input.display = DisplayRect(x: Int(s.x), y: Int(s.y), width: Int(s.width), height: Int(s.height))
             let wasPending = resolution.pending != nil
+            diag("host display now \(s.width)×\(s.height)\(wasPending ? " (answering our request)" : "")")
             resolution.update(display: s.display,
                               current: Mode(pixels: Int(s.width), Int(s.height), scale: currentScale),
                               original: s.hasOriginalResolution ? Mode(s.originalResolution) : nil,
@@ -149,12 +161,15 @@ final class RemoteConnection {
         case .cursorPosition(let x, let y):
             input.hostCursorMoved(x: x, y: y)
         case .loginFailed(let reason):
+            diag("login refused: \(reason)")
             finishLogin(.failure(ConnectError.login(reason)))
         case .video(let frame):
             show(frame)
         case .unsupportedCodec(let codec):
+            diag("unsupported codec \(codec)")
             status = "The host switched to \(codec.uppercased()), which Oxide can't decode. Check its hardware encoding."
         case .closed(let reason):
+            diag("closed\(reason.map { ": \($0)" } ?? "")")
             finishLogin(.failure(ConnectError.closed(reason)))
             status = "Disconnected\(reason.map { ": \($0)" } ?? "")."
         }
@@ -187,6 +202,7 @@ final class RemoteConnection {
     /// The window's size changed (connect, rotate, fold, Split View).
     func screenChanged(size: CGSize, scale: CGFloat) {
         guard size != screen?.size || scale != screen?.scale else { return }
+        diag("window \(Int(size.width))×\(Int(size.height)) pt @\(scale)x")
         screen = (size, scale)
         // Rotating and folding pass through intermediate sizes, and each change
         // stalls the stream while the host rebuilds its encoder.
@@ -210,15 +226,23 @@ final class RemoteConnection {
     private func applyResolution() {
         let defaults = UserDefaults.standard
         guard defaults.bool(forKey: SettingsKey.matchResolution) else {
-            if let restore = resolution.restore() { send([restore]) }
+            if let restore = resolution.restore() {
+                diag("matching off: restoring \(resolution.original.map { "\($0.width)×\($0.height)" } ?? "?")")
+                send([restore])
+            }
             return
         }
         guard let screen else { return }
         let textSize = TextSize(rawValue: defaults.string(forKey: SettingsKey.textSize) ?? "") ?? .balanced
         let factor = textSize.factor(screenScale: screen.scale)
         let target = Mode(Int((screen.size.width * factor).rounded()), Int((screen.size.height * factor).rounded()))
+        let pendingBefore = resolution.pending?.mode
         if let request = resolution.target(target, now: .now) {
+            let r = request.misc.changeDisplayResolution.resolution
+            diag("target \(target.width)×\(target.height) → asking for \(r.width)×\(r.height)")
             send([request])
+        } else if pendingBefore == nil, resolution.pending == nil {
+            diag("target \(target.width)×\(target.height): no change (current \(resolution.current.map { "\($0.width)×\($0.height)" } ?? "?"), \(resolution.modes.count) modes)")
         }
         // While a request is unconfirmed, look again at its deadline: then a
         // window change that came meanwhile is applied, or, if the host never
@@ -248,6 +272,7 @@ final class RemoteConnection {
     }
 
     func disconnect() async {
+        diag("disconnect")
         // Release a held button, and let queued input reach the host first.
         input.dragEnded()
         outbox.finish()

@@ -1,8 +1,34 @@
 import Foundation
 import Network
 
-public enum TransportError: Error, Equatable {
+public enum TransportError: LocalizedError, Equatable {
     case failed(String)
+    /// iOS didn't allow Local Network access (Settings → Privacy & Security
+    /// → Local Network), or nobody answered the prompt in time.
+    case localNetworkDenied
+
+    public var errorDescription: String? {
+        switch self {
+        case .failed(let reason): reason
+        case .localNetworkDenied:
+            "Oxide isn't allowed to reach computers on your network. Turn it on in Settings → Privacy & Security → Local Network → Oxide."
+        }
+    }
+}
+
+/// What to do when a connection reports `.waiting`.
+enum ConnectWait: Equatable {
+    case keepWaiting
+    case fail
+
+    /// How long the Local Network prompt may stay unanswered.
+    static let permissionGrace: TimeInterval = 60
+
+    static func onWaiting(localNetworkDenied: Bool) -> ConnectWait {
+        // The first LAN connection waits for the user to answer iOS's Local
+        // Network prompt; once allowed, it carries on by itself.
+        localNetworkDenied ? .keepWaiting : .fail
+    }
 }
 
 /// A TCP connection to a host, over Network.framework.
@@ -28,11 +54,31 @@ public final class TCPTransport: Transport, @unchecked Sendable {
         try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { (done: CheckedContinuation<Void, Error>) in
                 let once = Once()
+                let queue = queue
+                let permissionDeadline = Once()
                 connection.stateUpdateHandler = { state in
                     switch state {
                     case .ready:
                         once.run { done.resume() }
-                    case .failed(let e), .waiting(let e):
+                    case .waiting(let e):
+                        let denied = connection.currentPath?.unsatisfiedReason == .localNetworkDenied
+                        switch ConnectWait.onWaiting(localNetworkDenied: denied) {
+                        case .keepWaiting:
+                            permissionDeadline.run {
+                                queue.asyncAfter(deadline: .now() + ConnectWait.permissionGrace) {
+                                    once.run {
+                                        connection.cancel()
+                                        done.resume(throwing: TransportError.localNetworkDenied)
+                                    }
+                                }
+                            }
+                        case .fail:
+                            once.run {
+                                connection.cancel()
+                                done.resume(throwing: TransportError.failed(e.localizedDescription))
+                            }
+                        }
+                    case .failed(let e):
                         once.run {
                             connection.cancel()
                             done.resume(throwing: TransportError.failed(e.localizedDescription))
