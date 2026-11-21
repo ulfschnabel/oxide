@@ -1,0 +1,11 @@
+spike/message_pb2.py
+spike/message.proto
+__pycache__/
+*.pw
+build/
+.build/
+Oxide.xcodeproj/
+.swiftpm/
+tools/testflight.local.json
+*.log
+.DS_Store

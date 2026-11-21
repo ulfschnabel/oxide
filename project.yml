@@ -1,0 +1,46 @@
+name: Oxide
+options:
+  bundleIdPrefix: com.ulfschnabel
+  deploymentTarget:
+    iOS: "26.0"
+  createIntermediateGroups: true
+packages:
+  OxideKit:
+    path: Packages/OxideKit
+settings:
+  base:
+    DEVELOPMENT_TEAM: X632M62W9H
+    SWIFT_VERSION: "6.0"
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+targets:
+  Oxide:
+    type: application
+    platform: iOS
+    sources: [Oxide]
+    dependencies:
+      - package: OxideKit
+    info:
+      path: Oxide/Info.plist
+      properties:
+        CFBundleDisplayName: Oxide
+        UILaunchScreen: {}
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        NSLocalNetworkUsageDescription: Oxide connects to computers on your network to control them remotely.
+        ITSAppUsesNonExemptEncryption: false
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.ulfschnabel.duodesk
+        TARGETED_DEVICE_FAMILY: "1,2"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        GENERATE_INFOPLIST_FILE: NO
