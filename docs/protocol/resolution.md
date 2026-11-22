@@ -316,6 +316,13 @@ behaviour:
    pixel size; otherwise take the largest.
 4. Never send a mode that is not in the list.
 
+What Oxide does (`ResolutionPicker`): among modes within about 35% of the screen's aspect, it minimises the
+aspect error plus a quarter of the size error. If none is that close, for example an upright phone against
+a Windows host, which lists modes for the current orientation only, the picture is letterboxed anyway. It
+then picks the mode whose fitted scale is closest to the target (`min(W/w, H/h)` near 1, so in portrait the
+width matches), with a small preference for squarer modes. It doesn't go below 1024×720 if the host lists
+anything that size.
+
 ---
 
 ## 7. Risks

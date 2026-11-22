@@ -35,13 +35,39 @@ public enum ResolutionPicker {
     /// Modes whose shape is further off than this (~35%) aren't worth it.
     static let maxAspectError = 0.3
 
+    /// When no mode has a similar shape, how much shape still counts
+    /// against getting the scale right.
+    static let letterboxAspectWeight = 0.25
+    /// The smallest mode worth letterboxing into, if the host has one this
+    /// big: Windows dialogs need about this much.
+    static let usableMinimum = Mode(1024, 720)
+
     public static func best(from modes: [Mode], for target: Mode) -> Mode? {
         guard target.width > 0, target.height > 0 else { return nil }
+        let valid = modes.filter { $0.width > 0 && $0.height > 0 }
         func aspectError(_ m: Mode) -> Double { abs(log(m.aspect) - log(target.aspect)) }
         func score(_ m: Mode) -> Double { aspectError(m) + sizeWeight * abs(log(m.area / target.area)) }
-        return modes
-            .filter { $0.width > 0 && $0.height > 0 && aspectError($0) <= maxAspectError }
-            .min { (score($0), -$0.area) < (score($1), -$1.area) }
+        let similar = valid.filter { aspectError($0) <= maxAspectError }
+        if !similar.isEmpty {
+            return similar.min { (score($0), -$0.area) < (score($1), -$1.area) }
+        }
+        return letterboxed(from: valid, for: target)
+    }
+
+    /// Nothing has the screen's shape (an upright phone against a host that
+    /// only lists landscape modes): the picture will be letterboxed, so what
+    /// matters is the scale it's shown at. Picks the mode whose fitted scale
+    /// is closest to the target's, with a small preference for squarer modes
+    /// (they fill more of an upright screen).
+    static func letterboxed(from modes: [Mode], for target: Mode) -> Mode? {
+        let usable = modes.filter { $0.width >= usableMinimum.width && $0.height >= usableMinimum.height }
+        let pool = usable.isEmpty ? modes : usable
+        func score(_ m: Mode) -> Double {
+            // How much the mode is scaled to fit the target: 1 is just right.
+            let fit = min(Double(target.width) / Double(m.width), Double(target.height) / Double(m.height))
+            return abs(log(fit)) + letterboxAspectWeight * abs(log(m.aspect) - log(target.aspect))
+        }
+        return pool.min { (score($0), -$0.area) < (score($1), -$1.area) }
     }
 }
 

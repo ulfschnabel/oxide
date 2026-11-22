@@ -30,11 +30,20 @@ struct RemoteView: View {
             }
             HStack(spacing: 8) {
                 Button("Computers", systemImage: "rectangle.stack") { onShowList() }
-                Text(host?.displayName ?? connection.peer.hostname)
-                    .font(.footnote.weight(.semibold))
+                // The whole name, or none on a narrow upright screen where
+                // the buttons need the room.
+                ViewThatFits(in: .horizontal) {
+                    Text(host?.displayName ?? connection.peer.hostname)
+                        .font(.footnote.weight(.semibold))
+                        .lineLimit(1)
+                        .fixedSize()
+                    Color.clear.frame(width: 0, height: 0)
+                }
                 if let position, position.count > 1 {
                     Text("\(position.index + 1) of \(position.count)")
                         .font(.footnote.monospacedDigit())
+                        .lineLimit(1)
+                        .fixedSize()
                         .foregroundStyle(.white.opacity(0.7))
                         .accessibilityLabel("Session \(position.index + 1) of \(position.count); swipe with three fingers to switch")
                 }

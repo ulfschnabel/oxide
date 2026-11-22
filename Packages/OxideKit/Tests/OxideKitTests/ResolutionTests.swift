@@ -34,9 +34,26 @@ struct ResolutionPickerTests {
         #expect(ResolutionPicker.best(from: windowsModes, for: Mode(4800, 2700)) == Mode(3840, 2160))
     }
 
-    @Test func nothingWhenEveryModeIsFarOff() {
-        // A phone held upright against a landscape-only monitor.
-        #expect(ResolutionPicker.best(from: windowsModes, for: Mode(1179, 2556)) == nil)
+    @Test func uprightAgainstALandscapeOnlyHostFitsTheWidth() {
+        // A phone held upright against a landscape-only monitor (Windows lists
+        // modes for the current orientation only). No mode has the right
+        // shape, so the picture is letterboxed and its width sets the scale:
+        // the width closest to the target wins, a squarer mode on a near tie
+        // (it fills more of the upright screen).
+        // Duo outer screen upright, Balanced text: 699×1017.
+        #expect(ResolutionPicker.best(from: windowsModes, for: Mode(699, 1017)) == Mode(1024, 768))
+        // Sharp: 1398×2034.
+        #expect(ResolutionPicker.best(from: windowsModes, for: Mode(1398, 2034)) == Mode(1280, 1024))
+        // An iPhone upright at Sharp: 1179×2556.
+        #expect(ResolutionPicker.best(from: windowsModes, for: Mode(1179, 2556)) == Mode(1280, 1024))
+    }
+
+    @Test func letterboxedStaysUsable() {
+        // Windows dialogs need about 1024×768: smaller modes only when the
+        // host has nothing that size.
+        let small = [Mode(640, 480), Mode(800, 600), Mode(1024, 600), Mode(1024, 768), Mode(1920, 1080)]
+        #expect(ResolutionPicker.best(from: small, for: Mode(466, 678)) == Mode(1024, 768))
+        #expect(ResolutionPicker.best(from: [Mode(640, 480), Mode(800, 600)], for: Mode(466, 678)) == Mode(640, 480))
     }
 
     @Test func nothingFromAnEmptyList() {
@@ -145,10 +162,13 @@ struct ResolutionControllerTests {
         #expect(c.restore() == nil)
     }
 
-    @Test func aTargetThatFitsNothingLeavesTheModeAlone() {
+    @Test func rotatingUprightPicksTheBestLetterboxedMode() {
         var c = controller(current: Mode(1680, 1050))
-        // Rotated to portrait after matching: keep the landscape mode.
-        #expect(c.target(Mode(1404, 2002), now: t0) == nil)
+        // Rotated to portrait after matching: a landscape mode as wide as the
+        // upright screen asks for.
+        let request = c.target(Mode(1404, 2002), now: t0)
+        #expect(request?.misc.changeDisplayResolution.resolution.width == 1440)
+        #expect(request?.misc.changeDisplayResolution.resolution.height == 900)
     }
 }
 
