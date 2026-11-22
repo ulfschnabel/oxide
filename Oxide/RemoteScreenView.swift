@@ -18,6 +18,8 @@ struct RemoteScreen: UIViewRepresentable {
 
     func updateUIView(_ view: RemoteScreenView, context: Context) {
         view.videoSize = connection.videoSize
+        view.placeholder = connection.placeholder
+        if input.viewport != view.laidOutViewport { view.setNeedsLayout() }
         view.cursorView.center = input.cursorInView
         if input.keyboardShown != view.isFirstResponder {
             if input.keyboardShown { view.becomeFirstResponder() } else { view.resignFirstResponder() }
@@ -31,6 +33,16 @@ final class RemoteScreenView: UIView, UIKeyInput {
     var videoSize: CGSize = .zero {
         didSet { if videoSize != oldValue { setNeedsLayout() } }
     }
+    /// The last picture, over the live one while that isn't there.
+    var placeholder: UIImage? {
+        didSet {
+            placeholderView.image = placeholder
+            placeholderView.isHidden = placeholder == nil
+        }
+    }
+    private let placeholderView = UIImageView()
+    /// The zoom the last layout used.
+    private(set) var laidOutViewport = Viewport()
     /// The window's size and scale: what the remote resolution should fit.
     /// The window, not this view, so the keyboard showing doesn't count.
     var onScreenChange: ((CGSize, CGFloat) -> Void)?
@@ -50,7 +62,12 @@ final class RemoteScreenView: UIView, UIKeyInput {
         self.input = input
         super.init(frame: .zero)
         backgroundColor = .black
+        clipsToBounds = true  // a zoomed picture is larger than the view
         layer.addSublayer(videoLayer)
+        placeholderView.contentMode = .scaleAspectFit
+        placeholderView.isHidden = true
+        placeholderView.isUserInteractionEnabled = false
+        addSubview(placeholderView)
         cursorView.tintColor = .white
         cursorView.layer.shadowColor = UIColor.black.cgColor
         cursorView.layer.shadowOpacity = 0.9
@@ -67,13 +84,22 @@ final class RemoteScreenView: UIView, UIKeyInput {
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        videoLayer.frame = bounds
-        input.content = ViewMapping.contentRect(videoSize: videoSize, in: bounds)
+        let content = input.viewport.rect(fitted: fitted, in: bounds)
+        laidOutViewport = input.viewport
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)  // follow the fingers, don't animate
+        videoLayer.frame = videoSize == .zero ? bounds : content
+        CATransaction.commit()
+        placeholderView.frame = videoSize == .zero ? bounds : content
+        input.content = content
         cursorView.center = input.cursorInView
         if let window {
             onScreenChange?(window.bounds.size, window.traitCollection.displayScale)
         }
     }
+
+    /// Where the whole picture fits unzoomed.
+    private var fitted: CGRect { ViewMapping.contentRect(videoSize: videoSize, in: bounds) }
 
     // MARK: Gestures
 
@@ -115,6 +141,8 @@ final class RemoteScreenView: UIView, UIKeyInput {
         pointerDrag.maximumNumberOfTouches = 1
         pointerDrag.allowedTouchTypes = [UITouch.TouchType.indirectPointer.rawValue as NSNumber]
 
+        let pinch = UIPinchGestureRecognizer(target: self, action: #selector(pinched))
+
         let hover = UIHoverGestureRecognizer(target: self, action: #selector(hovering))
         #if DEBUG
         // When the host is the Mac running the simulator, the Mac's own pointer
@@ -124,12 +152,13 @@ final class RemoteScreenView: UIView, UIKeyInput {
 
         tap.require(toFail: twoTap)
         pan.require(toFail: hold)
-        for g in [pan, scroll, wheel, tap, twoTap, rightClick, hold, pointerDrag, hover] {
+        for g in [pan, scroll, wheel, tap, twoTap, rightClick, hold, pointerDrag, pinch, hover] {
             addGestureRecognizer(g)
         }
     }
 
     private var lastPan: CGPoint = .zero
+    private var lastPinch: CGPoint?
     private var lastHold: CGPoint = .zero
 
     @objc private func onePan(_ g: UIPanGestureRecognizer) {
@@ -139,9 +168,11 @@ final class RemoteScreenView: UIView, UIKeyInput {
             // The recognizer starts after some movement; don't lose it.
             input.pan(by: t)
             lastPan = t
+            followCursor()
         case (.trackpad, .changed):
             input.pan(by: CGPoint(x: t.x - lastPan.x, y: t.y - lastPan.y))
             lastPan = t
+            followCursor()
         case (.touch, .began):
             // Press where the finger came down, not where the drag was recognised.
             let p = g.location(in: self)
@@ -182,11 +213,42 @@ final class RemoteScreenView: UIView, UIKeyInput {
         case (.trackpad, .changed):
             input.pan(by: CGPoint(x: p.x - lastHold.x, y: p.y - lastHold.y))
             lastHold = p
+            followCursor()
         case (.trackpad, .ended), (.trackpad, .cancelled):
             input.dragEnded()
         default:
             break
         }
+    }
+
+    /// Pinch to zoom; moving both fingers meanwhile pans.
+    @objc private func pinched(_ g: UIPinchGestureRecognizer) {
+        let p = g.location(in: self)
+        switch g.state {
+        case .began, .changed:
+            // With one finger lifted the centre jumps; pan only from two.
+            if g.numberOfTouches >= 2, let last = lastPinch {
+                input.viewport.pan(by: CGPoint(x: p.x - last.x, y: p.y - last.y), fitted: fitted, in: bounds)
+            }
+            lastPinch = g.numberOfTouches >= 2 ? p : nil
+            input.viewport.zoom(by: g.scale, at: p, fitted: fitted, in: bounds)
+            g.scale = 1
+            layoutNow()
+        default:
+            lastPinch = nil
+        }
+    }
+
+    /// Trackpad mode, zoomed: keep the pointer in sight.
+    private func followCursor() {
+        guard input.viewport.isZoomed else { return }
+        input.viewport.reveal(input.cursorInView, margin: 32, fitted: fitted, in: bounds)
+        layoutNow()
+    }
+
+    private func layoutNow() {
+        setNeedsLayout()
+        layoutIfNeeded()
     }
 
     @objc private func pointerDragged(_ g: UIPanGestureRecognizer) {

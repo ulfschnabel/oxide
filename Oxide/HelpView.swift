@@ -48,8 +48,12 @@ struct HelpView: View {
             }
 
             Section {
+                gesture("plus.magnifyingglass", "Pinch", "Zoom in up to 4×; move both fingers while pinching to look around")
+                gesture("arrow.down.right.and.arrow.up.left", "Fit button", "Back to the whole screen (or pinch out)")
+                gesture("cursorarrow.motionlines", "Pointer at the edge", "In trackpad mode the zoomed view follows the pointer")
                 gesture("rectangle.portrait.rotate", "Rotate, fold or resize", "With Settings → Match the remote screen on, the remote computer switches to a resolution that fits; it switches back when you disconnect")
                 gesture("xmark", "Close button", "Disconnect")
+                gesture("arrow.triangle.2.circlepath", "Switching apps", "The session stays up for a while (Settings → In the Background), then pauses and reconnects when you come back")
             } header: {
                 Label("Screen", systemImage: "display")
             }

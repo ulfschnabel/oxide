@@ -19,6 +19,8 @@ final class InputController {
     private(set) var cursor: VirtualCursor
     /// Where the host's picture sits in the view; set by the view on layout.
     var content: CGRect = .zero
+    /// The zoom into the picture; kept for the whole session.
+    var viewport = Viewport()
 
     /// Trackpad: host pixels per finger point, on top of the picture scale.
     private var trackpadSpeed: Double { UserDefaults.standard.double(forKey: SettingsKey.pointerSpeed) }

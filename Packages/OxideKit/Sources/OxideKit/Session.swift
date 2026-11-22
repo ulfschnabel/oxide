@@ -29,6 +29,9 @@ public enum SessionEvent: Sendable, Equatable {
     case switchDisplay(Hbb_SwitchDisplay)
     /// The host's display list changed (a monitor added, moved or resized).
     case displays([Hbb_DisplayInfo])
+    /// The host ended the session on purpose, with its reason; `closed` follows.
+    case hostClosed(String)
+    /// The connection ended; the reason is the error, if it broke.
     case closed(String?)
 }
 
@@ -43,11 +46,16 @@ public actor Session {
     private let host: String
     private let password: String
     private let clientName: String
+    private let sessionID: UInt64
     private var decoder = FrameDecoder(maxLength: 64 << 20)
     private var loggedIn = false
 
-    public init(transport: Transport, host: String, password: String, clientName: String = "Oxide") {
+    /// A reconnect passes the session id of the connection it replaces:
+    /// the host then lets it back in on the password that one used.
+    public init(transport: Transport, host: String, password: String, clientName: String = "Oxide",
+                sessionID: UInt64 = Session.newID()) {
         self.transport = transport
+        self.sessionID = sessionID
         self.host = host
         self.password = password
         self.clientName = clientName
@@ -71,6 +79,8 @@ public actor Session {
         emit.yield(.closed(reason))
         emit.finish()
     }
+
+    public static func newID() -> UInt64 { .random(in: 1...UInt64(Int64.max)) }
 
     public func close() {
         transport.close()
@@ -107,8 +117,14 @@ public actor Session {
         case .cursorPosition(let p):
             emit.yield(.cursorPosition(x: p.x, y: p.y))
         case .misc(let misc):
-            if case .switchDisplay(let s) = misc.union {
+            switch misc.union {
+            case .switchDisplay(let s):
                 emit.yield(.switchDisplay(s))
+            case .closeReason(let reason):
+                emit.yield(.hostClosed(reason))
+                return false
+            default:
+                break
             }
         case .peerInfo(let info) where loggedIn:
             emit.yield(.displays(info.displays))
@@ -142,7 +158,7 @@ public actor Session {
             $0.password = PasswordHash.compute(password: password, salt: salt, challenge: challenge)
             $0.myID = "oxide"
             $0.myName = clientName
-            $0.sessionID = UInt64.random(in: 1...UInt64(Int64.max))
+            $0.sessionID = sessionID
             $0.version = Session.protocolVersion
             $0.myPlatform = "iOS"
             $0.videoAckRequired = false

@@ -37,6 +37,8 @@ enum SettingsKey {
     static let inputMode = "inputMode"
     static let pointerSpeed = "pointerSpeed"
     static let scrollSpeed = "scrollSpeed"
+    /// Seconds a session stays up in the background; 0 pauses it at once.
+    static let backgroundGrace = "backgroundGrace"
 
     static func register() {
         UserDefaults.standard.register(defaults: [
@@ -45,6 +47,7 @@ enum SettingsKey {
             inputMode: InputMode.trackpad.rawValue,
             pointerSpeed: 1.5,
             scrollSpeed: 2.0,
+            backgroundGrace: 30.0,
         ])
     }
 }
@@ -55,6 +58,7 @@ struct SettingsView: View {
     @AppStorage(SettingsKey.inputMode) private var inputMode: InputMode = .trackpad
     @AppStorage(SettingsKey.pointerSpeed) private var pointerSpeed = 1.5
     @AppStorage(SettingsKey.scrollSpeed) private var scrollSpeed = 2.0
+    @AppStorage(SettingsKey.backgroundGrace) private var backgroundGrace = 30.0
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -86,6 +90,21 @@ struct SettingsView: View {
                     LabeledContent("Scroll speed") {
                         Slider(value: $scrollSpeed, in: 0.5...6)
                     }
+                }
+
+                Section {
+                    Picker("Stay connected", selection: $backgroundGrace) {
+                        Text("Off").tag(0.0)
+                        Text("10 seconds").tag(10.0)
+                        Text("30 seconds").tag(30.0)
+                    }
+                } header: {
+                    Text("In the Background")
+                } footer: {
+                    Text("""
+                        How long the session stays up while you're in another app. After that it pauses, \
+                        and reconnects when you come back. iOS allows about 30 seconds.
+                        """)
                 }
 
                 Section {

@@ -12,6 +12,10 @@ a foldable, the iPhone Duo.
 - **Trackpad or touch.** Trackpad mode works like a laptop trackpad. Touch mode
   acts where you tap. Gestures for right-click, scroll and drag. Sticky
   ctrl/alt/win/shift, extra keys, hardware keyboard and mouse.
+- **Zoom.** Pinch to zoom in up to 4×; in trackpad mode the view follows the
+  pointer.
+- **Stays connected.** The session survives a quick trip to another app, and
+  reconnects by itself when the connection drops or you come back later.
 - **Saved computers.** Names and addresses are kept on the device. Passwords
   go in the keychain and are never synced.
 

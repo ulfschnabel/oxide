@@ -2,13 +2,41 @@ import Foundation
 import Network
 
 public enum TransportError: LocalizedError, Equatable {
-    case failed(String)
+    /// Nothing is listening on that port.
+    case refused
+    /// No route to the host, or it didn't answer.
+    case unreachable
+    /// The host name doesn't resolve.
+    case notFound
+    /// The connection broke after it was up.
+    case connectionLost
     /// iOS didn't allow Local Network access (Settings → Privacy & Security
     /// → Local Network), or nobody answered the prompt in time.
     case localNetworkDenied
+    /// Anything else, with the system's description (for the log).
+    case failed(String)
+
+    init(_ error: NWError) {
+        switch error {
+        case .posix(.ECONNREFUSED):
+            self = .refused
+        case .posix(.ETIMEDOUT), .posix(.EHOSTUNREACH), .posix(.ENETUNREACH), .posix(.EHOSTDOWN), .posix(.ENETDOWN):
+            self = .unreachable
+        case .posix(.ECONNRESET), .posix(.EPIPE), .posix(.ECONNABORTED), .posix(.ENOTCONN):
+            self = .connectionLost
+        case .dns:
+            self = .notFound
+        default:
+            self = .failed(error.localizedDescription)
+        }
+    }
 
     public var errorDescription: String? {
         switch self {
+        case .refused: "Connection refused"
+        case .unreachable: "Host unreachable"
+        case .notFound: "Host not found"
+        case .connectionLost: "Connection lost"
         case .failed(let reason): reason
         case .localNetworkDenied:
             "Oxide isn't allowed to reach computers on your network. Turn it on in Settings → Privacy & Security → Local Network → Oxide."
@@ -81,13 +109,13 @@ public final class TCPTransport: Transport, @unchecked Sendable {
                         case .fail:
                             once.run {
                                 connection.cancel()
-                                done.resume(throwing: TransportError.failed(e.localizedDescription))
+                                done.resume(throwing: TransportError(e))
                             }
                         }
                     case .failed(let e):
                         once.run {
                             connection.cancel()
-                            done.resume(throwing: TransportError.failed(e.localizedDescription))
+                            done.resume(throwing: TransportError(e))
                         }
                     case .cancelled:
                         once.run { done.resume(throwing: CancellationError()) }
@@ -105,7 +133,7 @@ public final class TCPTransport: Transport, @unchecked Sendable {
     public func send(_ data: Data) async throws {
         try await withCheckedThrowingContinuation { (done: CheckedContinuation<Void, Error>) in
             connection.send(content: data, completion: .contentProcessed { error in
-                if let error { done.resume(throwing: TransportError.failed(error.localizedDescription)) } else { done.resume() }
+                if let error { done.resume(throwing: TransportError(error)) } else { done.resume() }
             })
         }
     }
@@ -114,7 +142,7 @@ public final class TCPTransport: Transport, @unchecked Sendable {
         try await withCheckedThrowingContinuation { (done: CheckedContinuation<Data?, Error>) in
             connection.receive(minimumIncompleteLength: 1, maximumLength: 1 << 20) { data, _, isComplete, error in
                 if let error {
-                    done.resume(throwing: TransportError.failed(error.localizedDescription))
+                    done.resume(throwing: TransportError(error))
                 } else if let data, !data.isEmpty {
                     done.resume(returning: data)
                 } else if isComplete {

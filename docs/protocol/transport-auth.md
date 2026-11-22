@@ -300,3 +300,25 @@ Verified in `src/server/connection.rs` and live against a macOS host.
   `{"t":"Config","c":["temporary-password",null]}` or `{"t":"Options",...}`).
   Editing `RustDesk2.toml` directly doesn't stick: the running app writes its
   own copy back.
+
+## Reconnecting (RustDesk 1.5.3)
+
+- **The host remembers a session for 30 s** after the last message it got from
+  the client (`SESSION_TIMEOUT` in `src/server/connection.rs`), keyed by
+  `LoginRequest.my_id`, `my_name` and `session_id`. A login with the same key
+  whose password hash matches the password that session logged in with is let
+  in (`is_recent_session`), even if a one-time password has rotated since.
+  Oxide keeps one `session_id` for a whole session and sends it on every
+  reconnect.
+- **A close reason ends that.** `Misc.close_reason` from the client removes the
+  session (`check_remove_session`), so a client that wants to come back closes
+  the socket without one. The host sends one when someone ends the session on
+  its side; Oxide shows it and doesn't reconnect.
+- **The host's own timeout** is also 30 s: with no message from the client for
+  that long (it echoes `TestDelay` every few seconds), the host closes with
+  "Timeout".
+- **Resolution.** When the last remote connection closes, the host restores its
+  displays' resolutions (`restore_resolutions`). After a reconnect the client
+  asks again.
+- **The picture.** `Misc.refresh_video = true` makes the host send a key frame,
+  which a decoder that missed frames (an app back from the background) needs.

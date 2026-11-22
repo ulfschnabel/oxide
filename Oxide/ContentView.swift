@@ -13,7 +13,9 @@ struct ContentView: View {
 
     var body: some View {
         if let session {
-            RemoteView(connection: session.connection, title: session.host?.displayName) {
+            RemoteView(connection: session.connection, host: session.host, onNewPassword: { password, remember in
+                if remember, let host = session.host { library.remember(password, for: host) }
+            }) {
                 self.session = nil
             }
         } else {
@@ -224,7 +226,7 @@ struct HomeView: View {
             case .success(let connection):
                 library.markConnected(host)
                 onConnected(host, connection)
-            case .failure(ConnectError.login(.wrongPassword)):
+            case .failure(ConnectionProblem.login(.wrongPassword)):
                 askPassword = AskPassword(host: host, wrong: true)
             case .failure(is CancellationError):
                 break
