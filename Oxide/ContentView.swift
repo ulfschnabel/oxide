@@ -1,34 +1,127 @@
 import OxideKit
 import SwiftUI
 
-/// The saved computers, or the remote screen while connected.
+/// The saved computers, or the remote screen of one of the open sessions.
 struct ContentView: View {
     @State private var library = HostLibrary()
-    @State private var session: ActiveSession?
-
-    struct ActiveSession {
-        let host: SavedHost?
-        let connection: RemoteConnection
-    }
+    @State private var open = OpenSessions()
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
-        if let session {
-            RemoteView(connection: session.connection, host: session.host, onNewPassword: { password, remember in
-                if remember, let host = session.host { library.remember(password, for: host) }
-            }) {
-                self.session = nil
+        Group {
+            if let session = open.shown {
+                RemoteView(
+                    connection: session.connection, host: session.host, position: open.ring.position,
+                    onNewPassword: { password, remember in
+                        if remember, let host = session.host { library.remember(password, for: host) }
+                    },
+                    onSwitch: { offset in
+                        // The outgoing view must already carry the new slide
+                        // direction when it's removed: set it first, switch next turn.
+                        open.prepareStep(offset)
+                        Task { withAnimation(.snappy) { open.step(offset) } }
+                    },
+                    onShowList: { open.showList() },
+                    onClose: { open.close(session.id) })
+                    .id(session.id)
+                    .transition(.push(from: open.lastStep < 0 ? .leading : .trailing))
+            } else {
+                HomeView(library: library, openHosts: open.hostIDs, hasOpenSessions: !open.all.isEmpty,
+                         onConnected: { host, connection in open.add(host: host, connection: connection) },
+                         onShowOpen: { host in open.show(host?.id) },
+                         onDeleted: { host in open.close(host.id) })
             }
-        } else {
-            HomeView(library: library) { host, connection in
-                session = ActiveSession(host: host, connection: connection)
+        }
+        // Every open session goes to the background and comes back, not
+        // only the one on screen.
+        .onChange(of: scenePhase) { _, phase in
+            for session in open.all {
+                switch phase {
+                case .background: session.connection.enteredBackground()
+                case .active: session.connection.becameActive()
+                default: break
+                }
             }
         }
     }
 }
 
+/// The remote sessions that are open, and which one is on screen. The others
+/// stay connected but don't decode video.
+@MainActor @Observable
+final class OpenSessions {
+    struct Entry: Identifiable {
+        let id: UUID
+        let host: SavedHost?
+        let connection: RemoteConnection
+    }
+
+    private(set) var ring = SessionRing<UUID>()
+    private var entries: [UUID: Entry] = [:]
+    /// The list is on screen while sessions stay open.
+    private(set) var listShown = false
+    /// The direction of the last switch, for the slide.
+    private(set) var lastStep = 1
+
+    var shown: Entry? { listShown ? nil : ring.current.flatMap { entries[$0] } }
+    var all: [Entry] { ring.ids.compactMap { entries[$0] } }
+    var hostIDs: Set<UUID> { Set(entries.values.compactMap(\.host?.id)) }
+
+    func add(host: SavedHost?, connection: RemoteConnection) {
+        let id = host?.id ?? UUID()
+        entries[id] = Entry(id: id, host: host, connection: connection)
+        show(id)
+    }
+
+    /// Shows an open session: the one for `id`, or the last one shown.
+    func show(_ id: UUID?) {
+        let target = id ?? ring.current
+        guard let target, entries[target] != nil else { return }
+        if target != ring.current { shown?.connection.hide() }
+        lastStep = 1
+        ring.open(target)
+        listShown = false
+        entries[target]?.connection.reveal()
+    }
+
+    /// Sets the slide direction for the switch that follows.
+    func prepareStep(_ offset: Int) {
+        lastStep = offset
+    }
+
+    func step(_ offset: Int) {
+        guard let old = shown, let new = ring.step(offset) else { return }
+        diag("switched to session \((ring.position?.index ?? 0) + 1) of \(ring.ids.count)")
+        lastStep = offset
+        old.connection.hide()
+        entries[new]?.connection.reveal()
+    }
+
+    func showList() {
+        shown?.connection.hide()
+        listShown = true
+    }
+
+    /// Disconnects a session (if it's open) and shows the next one.
+    func close(_ id: UUID) {
+        guard let entry = entries.removeValue(forKey: id) else { return }
+        Task { await entry.connection.disconnect() }
+        ring.close(id)
+        if !listShown { shown?.connection.reveal() }
+        if ring.ids.isEmpty { listShown = false }
+    }
+}
+
 struct HomeView: View {
     let library: HostLibrary
+    /// Saved computers with an open session.
+    var openHosts: Set<UUID> = []
+    var hasOpenSessions = false
     var onConnected: (SavedHost?, RemoteConnection) -> Void
+    /// Back to an open session: that computer's, or nil for the last one shown.
+    var onShowOpen: (SavedHost?) -> Void = { _ in }
+    /// A computer was deleted; its session, if open, goes too.
+    var onDeleted: (SavedHost) -> Void = { _ in }
 
     @State private var editing: SavedHost?
     @State private var adding = false
@@ -90,6 +183,12 @@ struct HomeView: View {
                 }
             }
             .toolbar {
+                if hasOpenSessions {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button("Open Sessions", systemImage: "rectangle.stack.fill") { onShowOpen(nil) }
+                            .disabled(attempt != nil)
+                    }
+                }
                 // Nothing else opens while connecting: its outcome (a password
                 // prompt or an error) needs to be able to show.
                 ToolbarItem(placement: .primaryAction) {
@@ -136,6 +235,7 @@ struct HomeView: View {
                 Button("Delete", role: .destructive) {
                     guard let deleting else { return }
                     if attempt?.host.id == deleting.id { cancel() }
+                    onDeleted(deleting)
                     library.remove(deleting)
                 }
             } message: {
@@ -171,7 +271,8 @@ struct HomeView: View {
                 Button {
                     start(host)
                 } label: {
-                    HostRow(host: host, connecting: connecting == host.id, hasPassword: library.hasPassword(host))
+                    HostRow(host: host, connecting: connecting == host.id, open: openHosts.contains(host.id),
+                            hasPassword: library.hasPassword(host))
                 }
                 .disabled(connecting != nil && connecting != host.id)
                 .swipeActions {
@@ -197,6 +298,10 @@ struct HomeView: View {
 
     private func start(_ host: SavedHost) {
         guard attempt == nil else { return }
+        if openHosts.contains(host.id) {
+            onShowOpen(host)
+            return
+        }
         if let password = library.password(for: host) {
             connect(host, password: password)
         } else {
@@ -264,6 +369,7 @@ struct HomeView: View {
 private struct HostRow: View {
     let host: SavedHost
     let connecting: Bool
+    let open: Bool
     let hasPassword: Bool
 
     var body: some View {
@@ -284,6 +390,12 @@ private struct HostRow: View {
             Spacer()
             if connecting {
                 ProgressView()
+            } else if open {
+                Label("Open", systemImage: "circle.fill")
+                    .labelStyle(.iconOnly)
+                    .font(.caption2)
+                    .foregroundStyle(.green)
+                    .accessibilityLabel("Session open")
             } else if host.passwordKind == .oneTime {
                 Image(systemName: "key.viewfinder").foregroundStyle(.secondary)
                     .accessibilityLabel("Asks for the one-time password")

@@ -70,6 +70,12 @@ final class RemoteConnection {
     private var awaitingKeyFrame = false
 
     private var inBackground = false
+    /// Whether this session is the one on screen (others stay connected
+    /// while another session, or the list, is shown).
+    private var shown = true
+    /// On screen and in front: only then is video decoded and the host's
+    /// resolution matched to this window.
+    private var visible: Bool { shown && !inBackground }
     private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
     private var pauseTask: Task<Void, Never>?
     private let pathMonitor = NWPathMonitor()
@@ -107,17 +113,17 @@ final class RemoteConnection {
     /// One TCP connection and login, as a new session generation.
     private func attach() async throws {
         guard let address = HostAddress(host) else { throw ConnectionProblem.invalidAddress }
-        diag("connect \(address.host):\(address.port)")
+        note("connect \(address.host):\(address.port)")
         let transport = TCPTransport(host: address.host, port: address.port)
         do {
             try await transport.connect()
         } catch is CancellationError {
             throw CancellationError()
         } catch {
-            diag("connect failed: \(error.localizedDescription)")
+            note("connect failed: \(error.localizedDescription)")
             throw ConnectionProblem(error)
         }
-        diag("tcp connected, logging in")
+        note("tcp connected, logging in")
         let session = Session(transport: transport, host: host, password: password,
                               clientName: UIDevice.current.name, sessionID: sessionID)
         generation += 1
@@ -127,7 +133,7 @@ final class RemoteConnection {
         let timeout = Task { @MainActor [weak self] in
             try? await Task.sleep(for: Self.loginTimeout)
             guard !Task.isCancelled else { return }
-            diag("login timed out")
+            self?.note("login timed out")
             self?.abortLogin(ConnectionProblem.notRustDesk)
         }
         defer { timeout.cancel() }
@@ -140,6 +146,11 @@ final class RemoteConnection {
         } onCancel: {
             Task { @MainActor in self.abortLogin(CancellationError()) }
         }
+    }
+
+    /// A diagnostics line, marked with the computer: several sessions log at once.
+    private func note(_ message: String) {
+        diag("\(host): \(message)")
     }
 
     /// Ends a login that hasn't finished, and its session.
@@ -200,7 +211,7 @@ final class RemoteConnection {
             }
             let shown = peer.displays.indices.contains(i)
                 ? "\(peer.displays[i].width)×\(peer.displays[i].height) scale \(peer.displays[i].scale)" : "?"
-            diag("logged in: \(peer.platform) \(peer.version), display \(i) of \(peer.displays.count) \(shown), \(peer.resolutions.resolutions.count) modes")
+            note("logged in: \(peer.platform) \(peer.version), display \(i) of \(peer.displays.count) \(shown), \(peer.resolutions.resolutions.count) modes")
             phase = .live
             liveSince = .now
             terminalProblem = nil
@@ -216,7 +227,7 @@ final class RemoteConnection {
             guard s.display == peer.currentDisplay else { break }
             input.display = DisplayRect(x: Int(s.x), y: Int(s.y), width: Int(s.width), height: Int(s.height))
             let wasPending = resolution.pending != nil
-            diag("host display now \(s.width)×\(s.height)\(wasPending ? " (answering our request)" : "")")
+            note("host display now \(s.width)×\(s.height)\(wasPending ? " (answering our request)" : "")")
             resolution.update(display: s.display,
                               current: Mode(pixels: Int(s.width), Int(s.height), scale: currentScale),
                               original: s.hasOriginalResolution ? Mode(s.originalResolution) : nil,
@@ -229,18 +240,18 @@ final class RemoteConnection {
         case .cursorPosition(let x, let y):
             input.hostCursorMoved(x: x, y: y)
         case .loginFailed(let reason):
-            diag("login refused: \(reason)")
+            note("login refused: \(reason)")
             finishLogin(.failure(ConnectionProblem.login(reason)))
         case .video(let frame):
             show(frame)
         case .unsupportedCodec(let codec):
-            diag("unsupported codec \(codec)")
+            note("unsupported codec \(codec)")
             terminalProblem = .unsupportedCodec(codec)
         case .hostClosed(let reason):
-            diag("host closed the session: \(reason)")
+            note("host closed the session: \(reason)")
             hostClosedReason = reason
         case .closed(let reason):
-            diag("closed\(reason.map { ": \($0)" } ?? "")")
+            note("closed\(reason.map { ": \($0)" } ?? "")")
             sessionEnded(error: reason)
         }
     }
@@ -307,24 +318,24 @@ final class RemoteConnection {
             switch policy.next(failures: failures, elapsed: .now - started, last: last) {
             case .giveUp:
                 let problem = last ?? .dropped
-                diag("giving up reconnecting: \(problem)")
+                note("giving up reconnecting: \(problem)")
                 phase = .failed(problem)
                 return
             case .retry(let delay):
                 phase = .reconnecting(attempt: failures + 1)
                 try? await Task.sleep(for: delay)
                 guard !Task.isCancelled else { return }
-                diag("reconnect attempt \(failures + 1)")
+                note("reconnect attempt \(failures + 1)")
                 do {
                     try await attach()
-                    diag("reconnected")
+                    note("reconnected")
                     return
                 } catch is CancellationError {
                     return
                 } catch {
                     last = ConnectionProblem(error)
                     reconnectFailures += 1
-                    diag("reconnect attempt failed: \(last.map { "\($0)" } ?? "?")")
+                    note("reconnect attempt failed: \(last.map { "\($0)" } ?? "?")")
                 }
             }
         }
@@ -335,7 +346,7 @@ final class RemoteConnection {
         networkUp = up
         // The network that was missing is back: one more round, unasked.
         guard cameBack, !inBackground, case .failed(let problem) = phase, problem.isTransient else { return }
-        diag("network is back, reconnecting")
+        note("network is back, reconnecting")
         startReconnect()
     }
 
@@ -358,7 +369,7 @@ final class RemoteConnection {
             pause(because: "in the background")
             return
         }
-        diag("in the background, keeping the session up to \(Int(grace)) s")
+        note("in the background, keeping the session up to \(Int(grace)) s")
         backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "Keep the remote session") { [weak self] in
             MainActor.assumeIsolated { self?.pause(because: "background time ran out") }
         }
@@ -378,14 +389,10 @@ final class RemoteConnection {
         endBackgroundTask()
         switch phase {
         case .live:
-            diag("back, session still live")
-            // The display layer stops in the background; start it again from a key frame.
-            renderer.sampleBufferRenderer.flush()
-            awaitingKeyFrame = true
-            send([Control.refreshVideo()])
-            scheduleResolution(after: .zero)
+            note("back, session still live")
+            if shown { restartPicture() }
         case .paused:
-            diag("back, reconnecting")
+            note("back, reconnecting")
             // Paused on purpose: earlier trouble doesn't count against this.
             reconnectStarted = nil
             reconnectFailures = 0
@@ -393,6 +400,36 @@ final class RemoteConnection {
         case .reconnecting, .failed, .ended:
             break
         }
+    }
+
+    /// The display layer stopped taking frames (background, hidden): start
+    /// it again from a key frame, and fit the host to this window again.
+    private func restartPicture() {
+        renderer.sampleBufferRenderer.flush()
+        awaitingKeyFrame = true
+        send([Control.refreshVideo()])
+        scheduleResolution(after: .zero)
+    }
+
+    // MARK: Several sessions
+
+    /// Another session (or the list) takes the screen: stay connected, stop
+    /// decoding, keep the last picture for when this one comes back.
+    func hide() {
+        guard shown else { return }
+        capturePlaceholder()
+        input.dragEnded()
+        // Its view leaves the window and iOS drops the keyboard with it.
+        input.keyboardShown = false
+        shown = false
+        resolutionWork?.cancel()
+    }
+
+    /// On screen again.
+    func reveal() {
+        guard !shown else { return }
+        shown = true
+        if phase == .live, !inBackground { restartPicture() }
     }
 
     private func pause(because reason: String) {
@@ -404,7 +441,7 @@ final class RemoteConnection {
             endBackgroundTask()
             return
         }
-        diag("pausing: \(reason)")
+        note("pausing: \(reason)")
         phase = .paused
         liveSince = nil
         let closing = closeSession()
@@ -425,8 +462,8 @@ final class RemoteConnection {
     // MARK: Video
 
     private func show(_ frame: VideoFrameUnit) {
-        // The display layer can't take frames in the background.
-        guard !inBackground else { return }
+        // Nobody sees it, and in the background the layer can't take frames.
+        guard visible else { return }
         if awaitingKeyFrame {
             guard frame.key else { return }
             awaitingKeyFrame = false
@@ -448,7 +485,7 @@ final class RemoteConnection {
             }
             if placeholder != nil { dropPlaceholderSoon() }
         } catch {
-            diag("video error: \(error)")
+            note("video error: \(error)")
             status = "The picture couldn't be decoded."
         }
     }
@@ -470,7 +507,7 @@ final class RemoteConnection {
         placeholderDrop = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(150))
             guard let self else { return }
-            if self.phase == .live, !self.inBackground { self.placeholder = nil }
+            if self.phase == .live, self.visible { self.placeholder = nil }
             self.placeholderDrop = nil
         }
     }
@@ -483,7 +520,7 @@ final class RemoteConnection {
         screen = (size, scale)
         // iOS resizes the window in the background to take app-switcher
         // snapshots; that's no reason to change the host. Applied on return.
-        guard !inBackground else { return }
+        guard visible else { return }
         // Rotating and folding pass through intermediate sizes, and each change
         // stalls the stream while the host rebuilds its encoder.
         scheduleResolution(after: .milliseconds(600))
@@ -505,11 +542,11 @@ final class RemoteConnection {
 
     private func applyResolution() {
         // A request nobody receives would time out and count against the mode.
-        guard phase == .live, !inBackground, outbox != nil else { return }
+        guard phase == .live, visible, outbox != nil else { return }
         let defaults = UserDefaults.standard
         guard defaults.bool(forKey: SettingsKey.matchResolution) else {
             if let restore = resolution.restore() {
-                diag("matching off: restoring \(resolution.original.map { "\($0.width)×\($0.height)" } ?? "?")")
+                note("matching off: restoring \(resolution.original.map { "\($0.width)×\($0.height)" } ?? "?")")
                 send([restore])
             }
             return
@@ -518,7 +555,7 @@ final class RemoteConnection {
         // Logged here, after the debounce: a live resize passes many sizes.
         if loggedScreen?.size != screen.size || loggedScreen?.scale != screen.scale {
             loggedScreen = screen
-            diag("window \(Int(screen.size.width))×\(Int(screen.size.height)) pt @\(screen.scale)x")
+            note("window \(Int(screen.size.width))×\(Int(screen.size.height)) pt @\(screen.scale)x")
         }
         let textSize = TextSize(rawValue: defaults.string(forKey: SettingsKey.textSize) ?? "") ?? .balanced
         let factor = textSize.factor(screenScale: screen.scale)
@@ -526,10 +563,10 @@ final class RemoteConnection {
         let pendingBefore = resolution.pending?.mode
         if let request = resolution.target(target, now: .now) {
             let r = request.misc.changeDisplayResolution.resolution
-            diag("target \(target.width)×\(target.height) → asking for \(r.width)×\(r.height)")
+            note("target \(target.width)×\(target.height) → asking for \(r.width)×\(r.height)")
             send([request])
         } else if pendingBefore == nil, resolution.pending == nil {
-            diag("target \(target.width)×\(target.height): no change (current \(resolution.current.map { "\($0.width)×\($0.height)" } ?? "?"), \(resolution.modes.count) modes)")
+            note("target \(target.width)×\(target.height): no change (current \(resolution.current.map { "\($0.width)×\($0.height)" } ?? "?"), \(resolution.modes.count) modes)")
         }
         // While a request is unconfirmed, look again at its deadline: then a
         // window change that came meanwhile is applied, or, if the host never
@@ -560,7 +597,7 @@ final class RemoteConnection {
     }
 
     func disconnect() async {
-        diag("disconnect")
+        note("disconnect")
         // Release a held button while input still goes out.
         input.dragEnded()
         // Nothing may bring the session back from here on.

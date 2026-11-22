@@ -5,10 +5,15 @@ struct RemoteView: View {
     let connection: RemoteConnection
     /// The saved computer, or nil (development auto-connect).
     var host: SavedHost?
+    /// This session's place among the open ones.
+    var position: (index: Int, count: Int)?
     /// A new password the user typed after a refused reconnect, and whether to keep it.
     var onNewPassword: (String, Bool) -> Void = { _, _ in }
+    /// Three-finger swipe: +1 next session, -1 previous.
+    var onSwitch: (Int) -> Void = { _ in }
+    /// The list of computers, with this session left open.
+    var onShowList: () -> Void = {}
     var onClose: () -> Void
-    @Environment(\.scenePhase) private var scenePhase
     @AppStorage(SettingsKey.matchResolution) private var matchResolution = true
     @AppStorage(SettingsKey.textSize) private var textSize: TextSize = .balanced
     @State private var showSettings = false
@@ -18,14 +23,21 @@ struct RemoteView: View {
     var body: some View {
         let input = connection.input
         ZStack(alignment: .top) {
-            RemoteScreen(connection: connection, input: input)
+            RemoteScreen(connection: connection, input: input, onSwitch: onSwitch)
                 .ignoresSafeArea(edges: [.top, .horizontal])
             if isReconnecting {
                 reconnecting
             }
             HStack(spacing: 8) {
+                Button("Computers", systemImage: "rectangle.stack") { onShowList() }
                 Text(host?.displayName ?? connection.peer.hostname)
                     .font(.footnote.weight(.semibold))
+                if let position, position.count > 1 {
+                    Text("\(position.index + 1) of \(position.count)")
+                        .font(.footnote.monospacedDigit())
+                        .foregroundStyle(.white.opacity(0.7))
+                        .accessibilityLabel("Session \(position.index + 1) of \(position.count); swipe with three fingers to switch")
+                }
                 if let status = connection.status {
                     Text(status).font(.footnote)
                 }
@@ -80,13 +92,6 @@ struct RemoteView: View {
                 }
             }
         }
-        .onChange(of: scenePhase) { _, phase in
-            switch phase {
-            case .background: connection.enteredBackground()
-            case .active: connection.becameActive()
-            default: break
-            }
-        }
         .onChange(of: matchResolution) { connection.resolutionSettingsChanged() }
         .onChange(of: textSize) { connection.resolutionSettingsChanged() }
     }
@@ -126,10 +131,8 @@ struct RemoteView: View {
         Binding(get: { failure != nil && !askPassword }, set: { _ in })
     }
 
+    /// The owner disconnects it (and shows the next open session).
     private func close() {
-        Task {
-            await connection.disconnect()
-            onClose()
-        }
+        onClose()
     }
 }

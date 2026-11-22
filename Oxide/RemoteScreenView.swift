@@ -7,16 +7,20 @@ import UIKit
 struct RemoteScreen: UIViewRepresentable {
     let connection: RemoteConnection
     let input: InputController
+    /// A three-finger swipe: +1 for the next session, -1 for the previous.
+    var onSwitch: (Int) -> Void = { _ in }
 
     func makeUIView(context: Context) -> RemoteScreenView {
         let view = RemoteScreenView(videoLayer: connection.renderer, input: input)
         view.onScreenChange = { [weak connection] size, scale in
             connection?.screenChanged(size: size, scale: scale)
         }
+        view.onSwitch = onSwitch
         return view
     }
 
     func updateUIView(_ view: RemoteScreenView, context: Context) {
+        view.onSwitch = onSwitch
         view.videoSize = connection.videoSize
         view.placeholder = connection.placeholder
         if input.viewport != view.laidOutViewport { view.setNeedsLayout() }
@@ -46,6 +50,7 @@ final class RemoteScreenView: UIView, UIKeyInput {
     /// The window's size and scale: what the remote resolution should fit.
     /// The window, not this view, so the keyboard showing doesn't count.
     var onScreenChange: ((CGSize, CGFloat) -> Void)?
+    var onSwitch: ((Int) -> Void)?
     private let videoLayer: AVSampleBufferDisplayLayer
     private let input: InputController
     private lazy var accessory: UIView = {
@@ -143,6 +148,16 @@ final class RemoteScreenView: UIView, UIKeyInput {
 
         let pinch = UIPinchGestureRecognizer(target: self, action: #selector(pinched))
 
+        // Three fingers left or right: the next or previous open session.
+        let next = UISwipeGestureRecognizer(target: self, action: #selector(swiped))
+        next.direction = .left
+        next.numberOfTouchesRequired = 3
+        next.allowedTouchTypes = touches
+        let previous = UISwipeGestureRecognizer(target: self, action: #selector(swiped))
+        previous.direction = .right
+        previous.numberOfTouchesRequired = 3
+        previous.allowedTouchTypes = touches
+
         let hover = UIHoverGestureRecognizer(target: self, action: #selector(hovering))
         #if DEBUG
         // When the host is the Mac running the simulator, the Mac's own pointer
@@ -152,7 +167,7 @@ final class RemoteScreenView: UIView, UIKeyInput {
 
         tap.require(toFail: twoTap)
         pan.require(toFail: hold)
-        for g in [pan, scroll, wheel, tap, twoTap, rightClick, hold, pointerDrag, pinch, hover] {
+        for g in [pan, scroll, wheel, tap, twoTap, rightClick, hold, pointerDrag, pinch, next, previous, hover] {
             addGestureRecognizer(g)
         }
     }
@@ -239,6 +254,16 @@ final class RemoteScreenView: UIView, UIKeyInput {
         }
     }
 
+    @objc private func swiped(_ g: UISwipeGestureRecognizer) {
+        onSwitch?(g.direction == .left ? 1 : -1)
+    }
+
+    /// The view's say on its recognizers: a pinch is two fingers, three are a switch.
+    override func gestureRecognizerShouldBegin(_ g: UIGestureRecognizer) -> Bool {
+        if g is UIPinchGestureRecognizer { return g.numberOfTouches <= 2 }
+        return super.gestureRecognizerShouldBegin(g)
+    }
+
     /// Trackpad mode, zoomed: keep the pointer in sight.
     private func followCursor() {
         guard input.viewport.isZoomed else { return }
@@ -277,6 +302,8 @@ final class RemoteScreenView: UIView, UIKeyInput {
     // MARK: Keyboard
 
     override var canBecomeFirstResponder: Bool { true }
+    /// iOS's three-finger undo/redo swipes would take the session switch.
+    override var editingInteractionConfiguration: UIEditingInteractionConfiguration { .none }
     override var inputAccessoryView: UIView? { accessory }
 
     var hasText: Bool { true }  // so Backspace always reaches deleteBackward
