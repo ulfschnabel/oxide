@@ -24,7 +24,7 @@ struct RemoteView: View {
         let input = connection.input
         ZStack(alignment: .top) {
             RemoteScreen(connection: connection, input: input, onSwitch: onSwitch)
-                .ignoresSafeArea(edges: [.top, .horizontal])
+                .ignoresSafeArea(edges: Self.pictureEdges)
             if isReconnecting {
                 waiting("Reconnecting…")
             } else if connection.holdingPicture {
@@ -72,7 +72,7 @@ struct RemoteView: View {
             .padding(.horizontal)
             .foregroundStyle(.white)
         }
-        .background(.black)
+        .background(Color(uiColor: .sessionBackground))
         .statusBarHidden()
         .sheet(isPresented: $showSettings) { SettingsView() }
         .sheet(isPresented: $showHelp) {
@@ -104,6 +104,13 @@ struct RemoteView: View {
         .onChange(of: matchResolution) { connection.resolutionSettingsChanged() }
         .onChange(of: textSize) { connection.resolutionSettingsChanged() }
     }
+
+    /// Edge to edge on a phone or iPad; below the title bar in a Mac window.
+    #if targetEnvironment(macCatalyst)
+    private static let pictureEdges: Edge.Set = .horizontal
+    #else
+    private static let pictureEdges: Edge.Set = [.top, .horizontal]
+    #endif
 
     private var modeTitle: String {
         switch connection.input.mode {

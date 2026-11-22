@@ -4,6 +4,11 @@ import OxideKit
 import SwiftUI
 import UIKit
 
+extension UIColor {
+    /// Around the remote picture: a very dark grey, softer than pure black.
+    static let sessionBackground = UIColor(white: 0.11, alpha: 1)
+}
+
 /// The remote screen: video, the cursor, gestures, and the keyboard.
 struct RemoteScreen: UIViewRepresentable {
     let connection: RemoteConnection
@@ -69,7 +74,7 @@ final class RemoteScreenView: UIView, UIGestureRecognizerDelegate, UIPointerInte
         self.videoLayer = videoLayer
         self.input = input
         super.init(frame: .zero)
-        backgroundColor = .black
+        backgroundColor = .sessionBackground
         clipsToBounds = true  // a zoomed picture is larger than the view
         layer.addSublayer(videoLayer)
         placeholderView.contentMode = .scaleAspectFit
@@ -112,7 +117,13 @@ final class RemoteScreenView: UIView, UIGestureRecognizerDelegate, UIPointerInte
         input.content = content
         cursorView.center = input.cursorInView
         if let window {
-            onScreenChange?(window.bounds.size, window.traitCollection.displayScale)
+            #if targetEnvironment(macCatalyst)
+            // Below the title bar, where the picture goes on a Mac.
+            let size = window.bounds.inset(by: window.safeAreaInsets).size
+            #else
+            let size = window.bounds.size
+            #endif
+            onScreenChange?(size, window.traitCollection.displayScale)
         }
     }
 

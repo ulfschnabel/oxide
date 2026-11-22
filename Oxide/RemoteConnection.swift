@@ -89,7 +89,7 @@ final class RemoteConnection {
         self.host = host
         self.password = password
         renderer.videoGravity = .resizeAspect
-        renderer.backgroundColor = UIColor.black.cgColor
+        renderer.backgroundColor = UIColor.sessionBackground.cgColor
         pathMonitor.pathUpdateHandler = { [weak self] path in
             let up = path.status == .satisfied
             Task { @MainActor in self?.networkChanged(up: up) }
