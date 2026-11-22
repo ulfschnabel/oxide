@@ -323,6 +323,22 @@ then picks the mode whose fitted scale is closest to the target (`min(W/w, H/h)`
 width matches), with a small preference for squarer modes. It doesn't go below 1024×720 if the host lists
 anything that size.
 
+### Resolution before the first picture
+The client can't ask for a resolution before the stream starts. `OptionMessage.custom_resolution` (field
+13) is removed in 1.5.3, and the host subscribes the connection to video as soon as it sends the
+`LoginResponse` (connection.rs:2231, `try_sub_monitor_services`). So the first frames are always at the
+host's old resolution.
+
+Oxide asks for its mode right after login and keeps the picture back (`PictureHold`), showing
+"Connecting…" until one of these happens:
+- the host confirms the new size with a `SwitchDisplay`;
+- no change is needed;
+- 4 s pass, longer than one request's 3 s confirm timeout.
+
+It then flushes the display layer and sends `Misc.refresh_video` for a key frame. A reconnect within the
+host's 30 s session window usually needs no change, because the host restores resolutions only when the
+last connection closes.
+
 ---
 
 ## 7. Risks

@@ -76,6 +76,8 @@ def serve(conn, addr, password, frames):
 
 
 LOG_MOUSE = False
+RESIZE_DELAY = 0.0
+IGNORE_RESIZE = False
 
 
 def listen(conn, addr, reader, lock):
@@ -89,14 +91,18 @@ def listen(conn, addr, reader, lock):
             button = {1: "left", 2: "right", 4: "middle"}.get(e.mask >> 3, "")
             print(f"{addr}: mouse {kind} {button} {e.x},{e.y}".replace("  ", " "), flush=True)
             continue
+        if m.WhichOneof("union") == "misc" and m.misc.WhichOneof("union") == "refresh_video":
+            print(f"{addr}: refresh video", flush=True)
+            continue
         if m.WhichOneof("union") != "misc" or m.misc.WhichOneof("union") != "change_display_resolution":
             continue
         req = m.misc.change_display_resolution
         mode = (req.resolution.width, req.resolution.height)
         print(f"{addr}: change resolution of display {req.display} to {mode[0]}x{mode[1]}", flush=True)
-        if mode not in MODES:
-            print(f"{addr}: not a listed mode, ignored", flush=True)
+        if mode not in MODES or IGNORE_RESIZE:
+            print(f"{addr}: ignored", flush=True)
             continue
+        time.sleep(RESIZE_DELAY)
         reply = pb.Message()
         sd = reply.misc.switch_display
         sd.display, sd.width, sd.height = req.display, *mode
@@ -113,9 +119,13 @@ def main():
     p.add_argument("--password", required=True)
     p.add_argument("--port", type=int, default=21118)
     p.add_argument("--log-mouse", action="store_true", help="print the mouse events the client sends")
+    p.add_argument("--resize-delay", type=float, default=0.0, help="seconds before answering a resolution change")
+    p.add_argument("--ignore-resize", action="store_true", help="never answer resolution changes")
     args = p.parse_args()
-    global LOG_MOUSE
+    global LOG_MOUSE, RESIZE_DELAY, IGNORE_RESIZE
     LOG_MOUSE = args.log_mouse
+    RESIZE_DELAY = args.resize_delay
+    IGNORE_RESIZE = args.ignore_resize
     frames = [(f.read_bytes(), "-key" in f.name) for f in sorted(FIXTURES.glob("h264-*.bin"))]
     srv = socket.create_server(("0.0.0.0", args.port), reuse_port=True)
     print(f"fake host on :{args.port}, {len(frames)} frames")

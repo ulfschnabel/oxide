@@ -26,7 +26,10 @@ struct RemoteView: View {
             RemoteScreen(connection: connection, input: input, onSwitch: onSwitch)
                 .ignoresSafeArea(edges: [.top, .horizontal])
             if isReconnecting {
-                reconnecting
+                waiting("Reconnecting…")
+            } else if connection.holdingPicture {
+                // The host is changing its resolution to fit this screen.
+                waiting("Connecting…")
             }
             HStack(spacing: 8) {
                 Button("Computers", systemImage: "rectangle.stack") { onShowList() }
@@ -126,12 +129,12 @@ struct RemoteView: View {
     }
 
     /// Over the last picture, dimmed: it's not live.
-    private var reconnecting: some View {
+    private func waiting(_ text: String) -> some View {
         ZStack {
             Color.black.opacity(0.45)
             HStack(spacing: 12) {
                 ProgressView()
-                Text("Reconnecting…")
+                Text(text)
             }
             .padding(.horizontal, 20)
             .padding(.vertical, 12)

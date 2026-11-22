@@ -68,6 +68,10 @@ final class RemoteConnection {
     /// After the background or a reconnect, frames until the next key frame
     /// can't be decoded: they're skipped.
     private var awaitingKeyFrame = false
+    /// A new session's picture, kept back while the resolution is fitted.
+    private(set) var holdingPicture = false
+    private var pictureHold = PictureHold()
+    private var holdExpiry: Task<Void, Never>?
 
     private var inBackground = false
     /// Whether this session is the one on screen (others stay connected
@@ -187,6 +191,8 @@ final class RemoteConnection {
     @discardableResult
     private func closeSession() -> Task<Void, Never> {
         input.releaseAll()
+        // The next session holds its own picture back.
+        dropPictureHold()
         outbox?.finish()
         outbox = nil
         let session = session
@@ -221,6 +227,9 @@ final class RemoteConnection {
                 // Came back up while away (a network change): don't hold it.
                 pause(because: "logged in while in the background")
             } else {
+                if visible, UserDefaults.standard.bool(forKey: SettingsKey.matchResolution) {
+                    holdPicture()
+                }
                 scheduleResolution(after: .zero)
             }
         case .switchDisplay(let s):
@@ -270,6 +279,7 @@ final class RemoteConnection {
         outbox?.finish()
         outbox = nil
         session = nil
+        dropPictureHold()
         guard wasLive else { return }
         if let liveSince, .now - liveSince < Self.stableAfter, reconnectStarted != nil {
             // Died soon after a reconnect: that reconnect didn't really work.
@@ -463,7 +473,8 @@ final class RemoteConnection {
 
     private func show(_ frame: VideoFrameUnit) {
         // Nobody sees it, and in the background the layer can't take frames.
-        guard visible else { return }
+        // While the resolution is being fitted, frames are at the old size.
+        guard visible, !pictureHold.isHeld else { return }
         if awaitingKeyFrame {
             guard frame.key else { return }
             awaitingKeyFrame = false
@@ -517,13 +528,15 @@ final class RemoteConnection {
     /// The window's size changed (connect, rotate, fold, Split View).
     func screenChanged(size: CGSize, scale: CGFloat) {
         guard size != screen?.size || scale != screen?.scale else { return }
+        let first = screen == nil
         screen = (size, scale)
         // iOS resizes the window in the background to take app-switcher
         // snapshots; that's no reason to change the host. Applied on return.
         guard visible else { return }
         // Rotating and folding pass through intermediate sizes, and each change
-        // stalls the stream while the host rebuilds its encoder.
-        scheduleResolution(after: .milliseconds(600))
+        // stalls the stream while the host rebuilds its encoder. The first size
+        // (the view just appeared) is no rotation: the picture waits on it.
+        scheduleResolution(after: first ? .zero : .milliseconds(600))
     }
 
     /// The resolution settings changed.
@@ -549,6 +562,7 @@ final class RemoteConnection {
                 note("matching off: restoring \(resolution.original.map { "\($0.width)×\($0.height)" } ?? "?")")
                 send([restore])
             }
+            releasePicture()
             return
         }
         guard let screen else { return }
@@ -573,7 +587,49 @@ final class RemoteConnection {
         // confirmed, the next best mode is tried.
         if let deadline = resolution.pending?.deadline {
             scheduleResolution(after: .seconds(max(deadline.timeIntervalSinceNow, 0) + 0.3))
+        } else {
+            // Fitted, or nothing to change: the picture can start.
+            releasePicture()
         }
+    }
+
+    // MARK: Holding the first picture
+
+    /// Keeps the picture back until the host's resolution is fitted, so it
+    /// doesn't start at the old size and jump (see `PictureHold`).
+    private func holdPicture() {
+        pictureHold.begin(now: .now)
+        holdingPicture = true
+        holdExpiry?.cancel()
+        holdExpiry = Task { [weak self] in
+            try? await Task.sleep(for: PictureHold.limit)
+            guard let self, !Task.isCancelled else { return }
+            if self.pictureHold.expire(now: .now) {
+                self.note("resolution not settled in time: showing the picture")
+                self.startHeldPicture()
+            }
+        }
+    }
+
+    private func releasePicture() {
+        if pictureHold.release() { startHeldPicture() }
+    }
+
+    /// The hold ended: start from a key frame (the frames so far were dropped).
+    private func startHeldPicture() {
+        holdExpiry?.cancel()
+        holdExpiry = nil
+        holdingPicture = false
+        renderer.sampleBufferRenderer.flush()
+        awaitingKeyFrame = true
+        send([Control.refreshVideo()])
+    }
+
+    private func dropPictureHold() {
+        _ = pictureHold.release()
+        holdExpiry?.cancel()
+        holdExpiry = nil
+        holdingPicture = false
     }
 
     /// Host pixels per mode unit for the current display (2 on a Retina Mac).
