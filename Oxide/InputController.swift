@@ -47,6 +47,20 @@ final class InputController {
     private var dragging = false
     /// The on-screen mouse buttons held down.
     private(set) var buttons = HeldButtons()
+    /// A hardware mouse's buttons held down.
+    private var pointerButtons = HeldButtons()
+    /// Hardware keys down on the host (physical-keys mode).
+    private var keys = HeldKeys(platform: .other)
+
+    /// The host's platform, from the login: it decides the key codes.
+    var platform: HostPlatform {
+        get { keys.platform }
+        set {
+            guard newValue != keys.platform else { return }
+            send(keys.releaseAll())
+            keys = HeldKeys(platform: newValue)
+        }
+    }
 
     init(display: DisplayRect, send: @escaping ([Hbb_Message]) -> Void) {
         cursor = VirtualCursor(display: display)
@@ -118,10 +132,13 @@ final class InputController {
               Input.button(.left, down: true, modifiers: mods)])
     }
 
-    /// A hardware pointer pressed down where it is (hover already moved the cursor).
-    func pointerDragBegan() {
-        dragging = true
-        send([Input.button(.left, down: true, modifiers: takeModifiers())])
+    /// A hardware mouse's buttons changed: each goes down and up on the host
+    /// as it does here, wherever the pointer is.
+    func pointerButtons(_ pressed: Set<MouseButton>, at point: CGPoint) {
+        cursor.move(to: host(point))
+        // The bar's modifiers go with a new press, and are used up by it.
+        let pressing = !pressed.isSubset(of: pointerButtons.down)
+        send(pointerButtons.set(pressed, at: cursor.hostPoint, modifiers: pressing ? takeModifiers() : []))
     }
 
     func dragMoved(to point: CGPoint) {
@@ -150,6 +167,8 @@ final class InputController {
     func releaseAll() {
         dragEnded()
         releaseButtons()
+        send(pointerButtons.releaseAll())
+        send(keys.releaseAll())
     }
 
     private func releaseButtons() {
@@ -168,7 +187,7 @@ final class InputController {
     func hostCursorMoved(x: Int32, y: Int32) {
         inputLog.debug("host cursor at \(x),\(y) (display \(self.display.width)x\(self.display.height))")
         // During a drag the cursor is ours; the host's reports lag behind.
-        guard !dragging, !buttons.any else { return }
+        guard !dragging, !buttons.any, !pointerButtons.any else { return }
         cursor.move(to: (x, y))
     }
 
@@ -194,7 +213,45 @@ final class InputController {
         send([Input.ctrlAltDel])
     }
 
-    /// A hardware key; returns false for keys it doesn't send (modifier keys).
+    /// How a hardware key went to the host, if it did.
+    enum KeySent { case physical, character }
+
+    /// A hardware key went down. Physical keys mode sends it as the host's own
+    /// key, held until `keyUp`; otherwise (or with no such key on the host) as
+    /// a character.
+    func keyDown(hidUsage: Int, characters: String, charactersIgnoringModifiers: String,
+                 modifiers held: [Hbb_ControlKey], capsLock: Bool) -> KeySent? {
+        if physicalKeys,
+           let messages = keys.down(hidUsage, latching: StickyModifiers.all.filter { modifiers.active.contains($0) },
+                                    capsLock: capsLock) {
+            // A modifier key on its own doesn't use up the bar's modifiers.
+            if !MappedKeys.isModifier(hidUsage) { modifiers.consume() }
+            send(messages)
+            return .physical
+        }
+        return hardwareKey(hidUsage: hidUsage, characters: characters,
+                           charactersIgnoringModifiers: charactersIgnoringModifiers, modifiers: held) ? .character : nil
+    }
+
+    /// A physical key held down: the host's apps see a repeat.
+    func keyRepeated(hidUsage: Int, capsLock: Bool) {
+        if let message = keys.repeated(hidUsage, capsLock: capsLock) { send([message]) }
+    }
+
+    func keyUp(hidUsage: Int, capsLock: Bool) {
+        send(keys.up(hidUsage, capsLock: capsLock))
+    }
+
+    /// Lets go of every physical key down on the host.
+    func releaseKeys() {
+        send(keys.releaseAll())
+    }
+
+    private var physicalKeys: Bool {
+        UserDefaults.standard.string(forKey: SettingsKey.keyboardMode) != KeyboardMode.characters.rawValue
+    }
+
+    /// A hardware key as a character; returns false for keys it doesn't send (modifier keys).
     func hardwareKey(hidUsage: Int, characters: String, charactersIgnoringModifiers: String,
                      modifiers held: [Hbb_ControlKey]) -> Bool {
         let mods = StickyModifiers.all.filter { modifiers.active.contains($0) || held.contains($0) }

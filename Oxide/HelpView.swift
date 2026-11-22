@@ -51,8 +51,8 @@ struct HelpView: View {
             }
 
             Section {
-                gesture("keyboard.badge.ellipsis", "Hardware keyboard", "Typed keys and shortcuts go to the remote computer; held keys repeat")
-                gesture("computermouse", "Mouse or trackpad", "The pointer is the remote pointer: click, right-click, drag and scroll work directly")
+                gesture("keyboard.badge.ellipsis", "Hardware keyboard", "Works like a keyboard plugged into the remote computer, no Keyboard button needed: keys can be held, and its layout applies. Settings → Hardware Keyboard switches to characters for a different layout.")
+                gesture("computermouse", "Mouse or trackpad", "The pointer is the remote pointer: every button goes down and up as you press it, so clicks, right-clicks, middle-clicks and drags with any button work. Scrolling too.")
             } header: {
                 Label("Keyboard and mouse", systemImage: "computermouse")
             }

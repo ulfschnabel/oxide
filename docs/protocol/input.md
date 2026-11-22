@@ -91,6 +91,19 @@ The Flutter mobile client always sends **absolute MOVE positions that it compute
 
 ---
 
+### 1.6 Hardware mouse and trackpad in Oxide
+
+With `UIApplicationSupportsIndirectInputEvents`, UIKit delivers a mouse or trackpad as
+`indirectPointer` touches. `UIEvent.buttonMask` uses the same bits as RustDesk's button values: 1 left,
+2 right, 4 middle, 8 back, 16 forward. Oxide diffs the mask on every touch event and sends one down or up
+per button that changed (`HeldButtons.set`), after a MOVE to the pointer. Hover moves the pointer while no
+button is down. The device's own pointer is hidden over the picture, because the remote cursor is drawn
+there.
+
+Without that Info.plist key, iPadOS emulates touches: a mouse click is a `direct` touch and a secondary
+click becomes a context-menu request. Mac Catalyst turns a secondary click into a context-menu request
+even with the key, so right and middle buttons there need another route.
+
 ## 2. KeyEvent
 
 ```proto
@@ -134,6 +147,20 @@ message KeyEvent {                     // proto:298
   - `chr` → if `chr>>16 == 0` it is a scancode, otherwise the high word is a VK (2253-2260).
   - `unicode` is ignored, and **`control_key` is not handled** (falls to the "Unreachable" log). So Translate cannot do Ctrl+Alt+Del or arrow keys by ControlKey.
 - **Auto (3)**: client-side only. It is not handled by the host, so it falls to Legacy.
+
+What Oxide does: the on-screen keyboard and the accessory bar use Legacy. A hardware keyboard uses Map by
+default, through `MappedKeys`/`HeldKeys` (OxideKit), with tables generated from rdev by
+`tools/gen_keycodes.py`. Each key is sent down and up separately, and while it's held a further down is
+sent every 50 ms after 400 ms. Lock state rides along the way the official client sends it: `CapsLock` on
+letter keys when Caps Lock is on, and `NumLock` on keypad keys. The host briefly matches its lock key to
+that. Keys the host platform has no code for (Pause on Windows) and "Characters" in Settings fall back to
+Legacy. Modifiers latched on the bar are sent as their own key downs around the key. Map codes follow the
+host platform: Windows scancodes, macOS virtual key codes, X11 keycodes.
+
+UIKit delivers a hardware keyboard's keys as `UIPress`es to the first responder only when that responder
+is not a text input. A `UIKeyInput` responder gets characters through the text system, and arrows, Esc
+and the like not at all. So the remote view, a plain responder, takes keys, and a separate invisible
+`UIKeyInput` view is first responder only while the on-screen keyboard is up.
 
 **Recommendation for iOS text plus special keys: Legacy.** iOS delivers characters, Legacy injects characters as Unicode, and it supports ControlKey plus a modifier list. For a hardware keyboard you can optionally use Map: UIKey.keyCode is a HID usage → Windows scancode, which gives true key-down/up and games/shortcut fidelity.
 

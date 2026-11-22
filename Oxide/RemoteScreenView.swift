@@ -26,13 +26,12 @@ struct RemoteScreen: UIViewRepresentable {
         view.placeholder = connection.placeholder
         if input.viewport != view.laidOutViewport { view.setNeedsLayout() }
         view.cursorView.center = input.cursorInView
-        if input.keyboardShown != view.isFirstResponder {
-            if input.keyboardShown { view.becomeFirstResponder() } else { view.resignFirstResponder() }
-        }
+        view.softKeyboard = input.keyboardShown
+        view.takeKeys()
     }
 }
 
-final class RemoteScreenView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
+final class RemoteScreenView: UIView, UIGestureRecognizerDelegate, UIPointerInteractionDelegate {
     let cursorView = UIImageView(image: UIImage(systemName: "cursorarrow",
                                                withConfiguration: UIImage.SymbolConfiguration(pointSize: 18, weight: .bold)))
     var videoSize: CGSize = .zero {
@@ -88,6 +87,11 @@ final class RemoteScreenView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
         isMultipleTouchEnabled = true  // a finger on a button, another moving the pointer
         addButtons()
         addGestures()
+        addInteraction(UIPointerInteraction(delegate: self))
+        softInput.onResign = { [weak self] in self?.input.keyboardShown = false }
+        NotificationCenter.default.addObserver(self, selector: #selector(appWillResignActive),
+                                               name: UIApplication.willResignActiveNotification, object: nil)
+        addSubview(softInput)
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
@@ -114,8 +118,8 @@ final class RemoteScreenView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
     // MARK: Gestures
 
     private func addGestures() {
-        let touches: [NSNumber] = [UITouch.TouchType.direct.rawValue as NSNumber]
-        let pointerClicks: [NSNumber] = [UITouch.TouchType.direct, .indirectPointer].map { $0.rawValue as NSNumber }
+        // Fingers and Pencil: a mouse or trackpad's clicks are its own (`touchesBegan`).
+        let touches: [NSNumber] = [UITouch.TouchType.direct, .pencil].map { $0.rawValue as NSNumber }
 
         let pan = UIPanGestureRecognizer(target: self, action: #selector(onePan))
         pan.maximumNumberOfTouches = 1
@@ -132,24 +136,15 @@ final class RemoteScreenView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
         wheel.allowedTouchTypes = []
 
         let tap = UITapGestureRecognizer(target: self, action: #selector(oneTap))
-        tap.allowedTouchTypes = pointerClicks
+        tap.allowedTouchTypes = touches
 
         let twoTap = UITapGestureRecognizer(target: self, action: #selector(secondary))
         twoTap.numberOfTouchesRequired = 2
         twoTap.allowedTouchTypes = touches
 
-        let rightClick = UITapGestureRecognizer(target: self, action: #selector(secondary))
-        rightClick.buttonMaskRequired = .secondary
-        rightClick.allowedTouchTypes = [UITouch.TouchType.indirectPointer.rawValue as NSNumber]
-
         let hold = UILongPressGestureRecognizer(target: self, action: #selector(longPress))
         hold.minimumPressDuration = 0.35
         hold.allowedTouchTypes = touches
-
-        // A hardware mouse or trackpad dragging with the button down.
-        let pointerDrag = UIPanGestureRecognizer(target: self, action: #selector(pointerDragged))
-        pointerDrag.maximumNumberOfTouches = 1
-        pointerDrag.allowedTouchTypes = [UITouch.TouchType.indirectPointer.rawValue as NSNumber]
 
         let pinch = UIPinchGestureRecognizer(target: self, action: #selector(pinched))
 
@@ -172,7 +167,7 @@ final class RemoteScreenView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
 
         tap.require(toFail: twoTap)
         pan.require(toFail: hold)
-        for g in [pan, scroll, wheel, tap, twoTap, rightClick, hold, pointerDrag, pinch, next, previous, hover] {
+        for g in [pan, scroll, wheel, tap, twoTap, hold, pinch, next, previous, hover] {
             g.delegate = self
             addGestureRecognizer(g)
         }
@@ -329,21 +324,50 @@ final class RemoteScreenView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
         layoutIfNeeded()
     }
 
-    @objc private func pointerDragged(_ g: UIPanGestureRecognizer) {
-        let p = g.location(in: self)
-        let t = g.translation(in: self)
-        switch g.state {
-        case .began:
-            input.pointerMoved(to: CGPoint(x: p.x - t.x, y: p.y - t.y))
-            input.pointerDragBegan()
-            input.pointerMoved(to: p)
-        case .changed:
-            input.pointerMoved(to: p)
-        case .ended, .cancelled, .failed:
-            input.dragEnded()
-        default:
-            break
-        }
+    // MARK: Mouse and trackpad
+
+    // A hardware pointer's buttons, as they go down and up: any button, held
+    // as long as it's held (hover moves the pointer while none is down).
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        pointer(touches, event, ended: false)
+        super.touchesBegan(touches, with: event)
+    }
+
+    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
+        pointer(touches, event, ended: false)
+        super.touchesMoved(touches, with: event)
+    }
+
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+        pointer(touches, event, ended: true)
+        super.touchesEnded(touches, with: event)
+    }
+
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
+        pointer(touches, event, ended: true)
+        super.touchesCancelled(touches, with: event)
+    }
+
+    private func pointer(_ touches: Set<UITouch>, _ event: UIEvent?, ended: Bool) {
+        guard let touch = touches.first(where: { $0.type == .indirectPointer }) else { return }
+        let point = touch.location(in: self)
+        // A trackpad's tap-to-click has no button in its mask: it's the left one.
+        let mask = ended ? 0 : (event?.buttonMask.rawValue).map { $0 == 0 ? 1 : $0 } ?? 1
+        let pressed = MouseButton.pressed(inMask: mask)
+        input.pointerMoved(to: point)
+        input.pointerButtons(pressed, at: point)
+    }
+
+    /// The remote pointer is drawn over the picture: this device's own one
+    /// would be a second pointer on top. Over the mouse buttons it stays.
+    func pointerInteraction(_ interaction: UIPointerInteraction, regionFor request: UIPointerRegionRequest,
+                            defaultRegion: UIPointerRegion) -> UIPointerRegion? {
+        if !buttonBar.isHidden, buttonBar.frame.contains(request.location) { return nil }
+        return defaultRegion
+    }
+
+    func pointerInteraction(_ interaction: UIPointerInteraction, styleFor region: UIPointerRegion) -> UIPointerStyle? {
+        .hidden()
     }
 
     @objc private func hovering(_ g: UIHoverGestureRecognizer) {
@@ -354,34 +378,89 @@ final class RemoteScreenView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
 
     // MARK: Keyboard
 
+    // Two responders. This view takes a hardware keyboard's keys as presses,
+    // which UIKit only delivers in full to a responder that isn't a text
+    // input; `softInput` is one, for the on-screen keyboard. One of them is
+    // first responder whenever the session is on screen.
+
     override var canBecomeFirstResponder: Bool { true }
     /// iOS's three-finger undo/redo swipes would take the session switch.
     override var editingInteractionConfiguration: UIEditingInteractionConfiguration { .none }
-    override var inputAccessoryView: UIView? { accessory }
 
-    var hasText: Bool { true }  // so Backspace always reaches deleteBackward
-    func insertText(_ text: String) { input.insert(text) }
-    func deleteBackward() { input.deleteBackward() }
+    private lazy var softInput = SoftKeyboardInput(input: input, accessory: accessory)
 
-    var autocorrectionType: UITextAutocorrectionType { get { .no } set {} }
-    var autocapitalizationType: UITextAutocapitalizationType { get { .none } set {} }
-    var spellCheckingType: UITextSpellCheckingType { get { .no } set {} }
-    var smartQuotesType: UITextSmartQuotesType { get { .no } set {} }
-    var smartDashesType: UITextSmartDashesType { get { .no } set {} }
-    var smartInsertDeleteType: UITextSmartInsertDeleteType { get { .no } set {} }
-    var inlinePredictionType: UITextInlinePredictionType { get { .no } set {} }
+    /// The on-screen keyboard is up.
+    var softKeyboard = false {
+        didSet {
+            guard softKeyboard != oldValue else { return }
+            takeKeys()
+        }
+    }
 
-    /// Hardware keys: handled here, so they don't also arrive as insertText.
+    /// Makes the right responder first (after a sheet with its own text
+    /// field, too).
+    func takeKeys() {
+        guard window != nil else { return }
+        let responder: UIResponder = softKeyboard ? softInput : self
+        guard !responder.isFirstResponder else { return }
+        // A sheet or alert over the session keeps its own focus; look again
+        // once it's gone.
+        if window?.rootViewController?.presentedViewController != nil {
+            guard retake == nil else { return }
+            retake = Task { [weak self] in
+                try? await Task.sleep(for: .milliseconds(500))
+                self?.retake = nil
+                self?.takeKeys()
+            }
+            return
+        }
+        responder.becomeFirstResponder()
+    }
+
+    private var retake: Task<Void, Never>?
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        if window == nil { dropPresses() }
+        takeKeys()
+    }
+
+    override func resignFirstResponder() -> Bool {
+        let resigned = super.resignFirstResponder()
+        // Keys held now may never report their release here.
+        if resigned { dropPresses() }
+        return resigned
+    }
+
+    /// Forgets the keys held here, stops their repeats and lets go of them on
+    /// the host: for when their releases won't arrive (focus moved, Spotlight,
+    /// the app switcher).
+    private func dropPresses() {
+        repeatTasks.values.forEach { $0.cancel() }
+        repeatTasks.removeAll()
+        guard !handledPresses.isEmpty else { return }
+        handledPresses.removeAll()
+        input.releaseKeys()
+    }
+
+    @objc private func appWillResignActive() { dropPresses() }
+
+    /// Hardware keys.
     /// The host never repeats keys, so a held key is repeated here.
-    private var handledPresses = Set<UIPress>()
+    private var handledPresses: [UIPress: InputController.KeySent] = [:]
     private var repeatTasks: [UIPress: Task<Void, Never>] = [:]
 
     override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
         var unhandled = Set<UIPress>()
         for press in presses {
-            guard let key = press.key, send(key) else { unhandled.insert(press); continue }
-            handledPresses.insert(press)
-            startRepeating(press, key: key)
+            guard let key = press.key,
+                  let sent = input.keyDown(hidUsage: key.keyCode.rawValue, characters: key.characters,
+                                           charactersIgnoringModifiers: key.charactersIgnoringModifiers,
+                                           modifiers: Self.modifiers(key.modifierFlags),
+                                           capsLock: key.modifierFlags.contains(.alphaShift))
+            else { unhandled.insert(press); continue }
+            handledPresses[press] = sent
+            if !MappedKeys.isModifier(key.keyCode.rawValue) { startRepeating(press, key: key, sent: sent) }
         }
         if !unhandled.isEmpty { super.pressesBegan(unhandled, with: event) }
     }
@@ -396,17 +475,20 @@ final class RemoteScreenView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
         if !unhandled.isEmpty { super.pressesCancelled(unhandled, with: event) }
     }
 
-    private func send(_ key: UIKey) -> Bool {
-        input.hardwareKey(hidUsage: key.keyCode.rawValue, characters: key.characters,
-                          charactersIgnoringModifiers: key.charactersIgnoringModifiers,
-                          modifiers: Self.modifiers(key.modifierFlags))
-    }
-
-    private func startRepeating(_ press: UIPress, key: UIKey) {
+    private func startRepeating(_ press: UIPress, key: UIKey, sent: InputController.KeySent) {
+        let usage = key.keyCode.rawValue
+        let capsLock = key.modifierFlags.contains(.alphaShift)
         repeatTasks[press] = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(400))
-            while !Task.isCancelled, let self, self.handledPresses.contains(press) {
-                _ = self.send(key)
+            while !Task.isCancelled, let self, self.handledPresses[press] != nil {
+                switch sent {
+                case .physical:
+                    self.input.keyRepeated(hidUsage: usage, capsLock: capsLock)
+                case .character:
+                    _ = self.input.hardwareKey(hidUsage: usage, characters: key.characters,
+                                               charactersIgnoringModifiers: key.charactersIgnoringModifiers,
+                                               modifiers: Self.modifiers(key.modifierFlags))
+                }
                 try? await Task.sleep(for: .milliseconds(50))
             }
         }
@@ -416,8 +498,11 @@ final class RemoteScreenView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
     private func finish(_ presses: Set<UIPress>) -> Set<UIPress> {
         var unhandled = Set<UIPress>()
         for press in presses {
-            if handledPresses.remove(press) != nil {
+            if let sent = handledPresses.removeValue(forKey: press) {
                 repeatTasks.removeValue(forKey: press)?.cancel()
+                if sent == .physical, let key = press.key {
+                    input.keyUp(hidUsage: key.keyCode.rawValue, capsLock: key.modifierFlags.contains(.alphaShift))
+                }
             } else {
                 unhandled.insert(press)
             }
@@ -433,6 +518,46 @@ final class RemoteScreenView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
         if flags.contains(.command) { keys.append(.meta) }
         return keys
     }
+}
+
+/// The on-screen keyboard's text input: typed text goes to the host as
+/// characters. Invisible; first responder only while the keyboard is up.
+final class SoftKeyboardInput: UIView, UIKeyInput {
+    private let input: InputController
+    private let accessory: UIView
+    /// It stopped being first responder (the keyboard's dismiss key, a sheet).
+    var onResign: (() -> Void)?
+
+    init(input: InputController, accessory: UIView) {
+        self.input = input
+        self.accessory = accessory
+        super.init(frame: .zero)
+        isUserInteractionEnabled = false
+    }
+
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    override var canBecomeFirstResponder: Bool { true }
+    override var editingInteractionConfiguration: UIEditingInteractionConfiguration { .none }
+    override var inputAccessoryView: UIView? { accessory }
+
+    override func resignFirstResponder() -> Bool {
+        let resigned = super.resignFirstResponder()
+        if resigned { onResign?() }
+        return resigned
+    }
+
+    var hasText: Bool { true }  // so Backspace always reaches deleteBackward
+    func insertText(_ text: String) { input.insert(text) }
+    func deleteBackward() { input.deleteBackward() }
+
+    var autocorrectionType: UITextAutocorrectionType { get { .no } set {} }
+    var autocapitalizationType: UITextAutocapitalizationType { get { .none } set {} }
+    var spellCheckingType: UITextSpellCheckingType { get { .no } set {} }
+    var smartQuotesType: UITextSmartQuotesType { get { .no } set {} }
+    var smartDashesType: UITextSmartDashesType { get { .no } set {} }
+    var smartInsertDeleteType: UITextSmartInsertDeleteType { get { .no } set {} }
+    var inlinePredictionType: UITextInlinePredictionType { get { .no } set {} }
 }
 
 /// Above the keyboard: sticky modifiers and the keys iOS doesn't have.

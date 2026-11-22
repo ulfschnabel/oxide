@@ -1,7 +1,13 @@
 import Foundation
 
-public enum MouseButton: Int32, Sendable {
+public enum MouseButton: Int32, CaseIterable, Sendable {
     case left = 0x01, right = 0x02, middle = 0x04, back = 0x08, forward = 0x10
+
+    /// The buttons down in a pointer event's button mask (UIKit numbers
+    /// buttons with the same bits).
+    public static func pressed(inMask mask: Int) -> Set<MouseButton> {
+        Set(allCases.filter { Int($0.rawValue) & mask != 0 })
+    }
 }
 
 /// Input messages for the host. Mouse positions are absolute host pixels in
@@ -117,6 +123,7 @@ public struct HeldButtons: Sendable {
 
     public func isHeld(_ button: MouseButton) -> Bool { held.contains(button) }
     public var any: Bool { !held.isEmpty }
+    public var down: Set<MouseButton> { Set(held) }
 
     /// Down where the cursor is (the host doesn't move on a press, so it's
     /// positioned first). Nothing if it's down already.
@@ -137,5 +144,17 @@ public struct HeldButtons: Sendable {
     public mutating func releaseAll() -> [Hbb_Message] {
         defer { held.removeAll() }
         return held.map { Input.button($0, down: false) }
+    }
+
+    /// A hardware mouse's buttons are now `pressed`: ups for the ones let go,
+    /// then downs for the new ones.
+    public mutating func set(_ pressed: Set<MouseButton>, at point: (Int32, Int32),
+                             modifiers: [Hbb_ControlKey] = []) -> [Hbb_Message] {
+        var out: [Hbb_Message] = []
+        for button in held where !pressed.contains(button) { out += release(button) }
+        for button in MouseButton.allCases where pressed.contains(button) {
+            out += press(button, at: point, modifiers: modifiers)
+        }
+        return out
     }
 }

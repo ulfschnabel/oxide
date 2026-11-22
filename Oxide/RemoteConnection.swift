@@ -205,6 +205,7 @@ final class RemoteConnection {
         case .loggedIn(let peer):
             self.peer = peer
             input.display = currentDisplay
+            input.platform = HostPlatform(peerPlatform: peer.platform)
             // A new session: the host's display may have been restored meanwhile.
             resolution = ResolutionController()
             let i = Int(peer.currentDisplay)

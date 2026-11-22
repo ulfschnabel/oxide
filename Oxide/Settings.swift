@@ -37,12 +37,29 @@ enum InputMode: String, CaseIterable, Identifiable {
     }
 }
 
+/// How a hardware keyboard's keys reach the host.
+enum KeyboardMode: String, CaseIterable, Identifiable {
+    /// Physical keys (RustDesk's map mode): the remote computer's layout applies.
+    case keys
+    /// Characters (legacy mode): what this device's layout types.
+    case characters
+
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .keys: "Physical keys"
+        case .characters: "Characters"
+        }
+    }
+}
+
 enum SettingsKey {
     static let matchResolution = "matchResolution"
     static let textSize = "textSize"
     static let inputMode = "inputMode"
     static let pointerSpeed = "pointerSpeed"
     static let scrollSpeed = "scrollSpeed"
+    static let keyboardMode = "keyboardMode"
     /// Seconds a session stays up in the background; 0 pauses it at once.
     static let backgroundGrace = "backgroundGrace"
 
@@ -53,6 +70,7 @@ enum SettingsKey {
             inputMode: InputMode.trackpad.rawValue,
             pointerSpeed: 1.5,
             scrollSpeed: 2.0,
+            keyboardMode: KeyboardMode.keys.rawValue,
             backgroundGrace: 30.0,
         ])
     }
@@ -65,6 +83,7 @@ struct SettingsView: View {
     @AppStorage(SettingsKey.pointerSpeed) private var pointerSpeed = 1.5
     @AppStorage(SettingsKey.scrollSpeed) private var scrollSpeed = 2.0
     @AppStorage(SettingsKey.backgroundGrace) private var backgroundGrace = 30.0
+    @AppStorage(SettingsKey.keyboardMode) private var keyboardMode: KeyboardMode = .keys
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -96,6 +115,20 @@ struct SettingsView: View {
                     LabeledContent("Scroll speed") {
                         Slider(value: $scrollSpeed, in: 0.5...6)
                     }
+                }
+
+                Section {
+                    Picker("Send", selection: $keyboardMode) {
+                        ForEach(KeyboardMode.allCases) { Text($0.title).tag($0) }
+                    }
+                } header: {
+                    Text("Hardware Keyboard")
+                } footer: {
+                    Text("""
+                        Physical keys work like a keyboard plugged into the remote computer: keys can be \
+                        held, and its keyboard layout decides what they type. Choose Characters if the \
+                        remote computer uses a different layout from this keyboard.
+                        """)
                 }
 
                 Section {

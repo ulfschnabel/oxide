@@ -76,6 +76,7 @@ def serve(conn, addr, password, frames):
 
 
 LOG_MOUSE = False
+LOG_KEYS = False
 RESIZE_DELAY = 0.0
 IGNORE_RESIZE = False
 
@@ -90,6 +91,14 @@ def listen(conn, addr, reader, lock):
             kind = {0: "move", 1: "down", 2: "up", 3: "wheel", 4: "trackpad"}.get(e.mask & 7, e.mask & 7)
             button = {1: "left", 2: "right", 4: "middle"}.get(e.mask >> 3, "")
             print(f"{addr}: mouse {kind} {button} {e.x},{e.y}".replace("  ", " "), flush=True)
+            continue
+        if LOG_KEYS and m.WhichOneof("union") == "key_event":
+            k = m.key_event
+            mode = {0: "legacy", 1: "map", 2: "translate"}.get(k.mode, k.mode)
+            what = k.WhichOneof("union")
+            value = hex(k.chr) if what == "chr" else getattr(k, what) if what else ""
+            mods = [pb.ControlKey.Name(x) for x in k.modifiers]
+            print(f"{addr}: key {mode} {what}={value} down={k.down} press={k.press} mods={mods}", flush=True)
             continue
         if m.WhichOneof("union") == "misc" and m.misc.WhichOneof("union") == "refresh_video":
             print(f"{addr}: refresh video", flush=True)
@@ -119,11 +128,13 @@ def main():
     p.add_argument("--password", required=True)
     p.add_argument("--port", type=int, default=21118)
     p.add_argument("--log-mouse", action="store_true", help="print the mouse events the client sends")
+    p.add_argument("--log-keys", action="store_true", help="print the key events the client sends")
     p.add_argument("--resize-delay", type=float, default=0.0, help="seconds before answering a resolution change")
     p.add_argument("--ignore-resize", action="store_true", help="never answer resolution changes")
     args = p.parse_args()
-    global LOG_MOUSE, RESIZE_DELAY, IGNORE_RESIZE
+    global LOG_MOUSE, LOG_KEYS, RESIZE_DELAY, IGNORE_RESIZE
     LOG_MOUSE = args.log_mouse
+    LOG_KEYS = args.log_keys
     RESIZE_DELAY = args.resize_delay
     IGNORE_RESIZE = args.ignore_resize
     frames = [(f.read_bytes(), "-key" in f.name) for f in sorted(FIXTURES.glob("h264-*.bin"))]
