@@ -21,6 +21,7 @@ struct RemoteScreen: UIViewRepresentable {
 
     func updateUIView(_ view: RemoteScreenView, context: Context) {
         view.onSwitch = onSwitch
+        view.showsButtons = input.mode == .buttons
         view.videoSize = connection.videoSize
         view.placeholder = connection.placeholder
         if input.viewport != view.laidOutViewport { view.setNeedsLayout() }
@@ -31,7 +32,7 @@ struct RemoteScreen: UIViewRepresentable {
     }
 }
 
-final class RemoteScreenView: UIView, UIKeyInput {
+final class RemoteScreenView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
     let cursorView = UIImageView(image: UIImage(systemName: "cursorarrow",
                                                withConfiguration: UIImage.SymbolConfiguration(pointSize: 18, weight: .bold)))
     var videoSize: CGSize = .zero {
@@ -45,6 +46,8 @@ final class RemoteScreenView: UIView, UIKeyInput {
         }
     }
     private let placeholderView = UIImageView()
+    /// Left and right mouse buttons along the bottom, in buttons mode.
+    private let buttonBar = UIStackView()
     /// The zoom the last layout used.
     private(set) var laidOutViewport = Viewport()
     /// The window's size and scale: what the remote resolution should fit.
@@ -82,6 +85,8 @@ final class RemoteScreenView: UIView, UIKeyInput {
         cursorView.layer.anchorPoint = CGPoint(x: 0.3, y: 0.15)
         cursorView.isUserInteractionEnabled = false
         addSubview(cursorView)
+        isMultipleTouchEnabled = true  // a finger on a button, another moving the pointer
+        addButtons()
         addGestures()
     }
 
@@ -168,9 +173,13 @@ final class RemoteScreenView: UIView, UIKeyInput {
         tap.require(toFail: twoTap)
         pan.require(toFail: hold)
         for g in [pan, scroll, wheel, tap, twoTap, rightClick, hold, pointerDrag, pinch, next, previous, hover] {
+            g.delegate = self
             addGestureRecognizer(g)
         }
     }
+
+    /// With buttons the screen is a trackpad too.
+    private var gestureMode: InputController.Mode { input.mode == .touch ? .touch : .trackpad }
 
     private var lastPan: CGPoint = .zero
     private var lastPinch: CGPoint?
@@ -178,7 +187,7 @@ final class RemoteScreenView: UIView, UIKeyInput {
 
     @objc private func onePan(_ g: UIPanGestureRecognizer) {
         let t = g.translation(in: self)
-        switch (input.mode, g.state) {
+        switch (gestureMode, g.state) {
         case (.trackpad, .began):
             // The recognizer starts after some movement; don't lose it.
             input.pan(by: t)
@@ -219,7 +228,13 @@ final class RemoteScreenView: UIView, UIKeyInput {
     /// Hold then move: drag with the left button (trackpad) or a right click (touch).
     @objc private func longPress(_ g: UILongPressGestureRecognizer) {
         let p = g.location(in: self)
-        switch (input.mode, g.state) {
+        // A finger resting while an on-screen button is held is the pointer
+        // finger getting ready, not a press of its own: it only moves the pointer.
+        if g.state == .began, input.buttons.any, gestureMode == .trackpad {
+            lastHold = p
+            return
+        }
+        switch (gestureMode, g.state) {
         case (.touch, .began):
             input.secondaryTap(at: p)
         case (.trackpad, .began):
@@ -256,6 +271,44 @@ final class RemoteScreenView: UIView, UIKeyInput {
 
     @objc private func swiped(_ g: UISwipeGestureRecognizer) {
         onSwitch?(g.direction == .left ? 1 : -1)
+    }
+
+    /// A finger on a mouse button is only that: no gesture sees it.
+    func gestureRecognizer(_ g: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+        !(touch.view is MouseButtonView)
+    }
+
+    // MARK: Mouse buttons
+
+    private func addButtons() {
+        let left = MouseButtonView(title: "Left") { [weak self] down in
+            guard let self else { return }
+            if down { self.input.buttonPressed(.left) } else { self.input.buttonReleased(.left) }
+        }
+        let right = MouseButtonView(title: "Right") { [weak self] down in
+            guard let self else { return }
+            if down { self.input.buttonPressed(.right) } else { self.input.buttonReleased(.right) }
+        }
+        buttonBar.axis = .horizontal
+        buttonBar.distribution = .fillEqually
+        buttonBar.spacing = 8
+        buttonBar.addArrangedSubview(left)
+        buttonBar.addArrangedSubview(right)
+        buttonBar.translatesAutoresizingMaskIntoConstraints = false
+        buttonBar.isHidden = true
+        addSubview(buttonBar)
+        NSLayoutConstraint.activate([
+            buttonBar.leadingAnchor.constraint(equalTo: safeAreaLayoutGuide.leadingAnchor, constant: 12),
+            buttonBar.trailingAnchor.constraint(equalTo: safeAreaLayoutGuide.trailingAnchor, constant: -12),
+            // Above the keyboard when it's up.
+            buttonBar.bottomAnchor.constraint(equalTo: keyboardLayoutGuide.topAnchor, constant: -8),
+            buttonBar.heightAnchor.constraint(equalToConstant: 64),
+        ])
+    }
+
+    /// Shown in buttons mode only.
+    var showsButtons = false {
+        didSet { buttonBar.isHidden = !showsButtons }
     }
 
     /// The view's say on its recognizers: a pinch is two fingers, three are a switch.
@@ -437,5 +490,67 @@ struct AccessoryBar: View {
             }
         }
         .accessibilityValue(state == .off ? "off" : state == .once ? "once" : "locked")
+    }
+}
+
+/// A mouse button on the screen: down while a finger is on it, up when it
+/// lifts (or iOS cancels the touch).
+final class MouseButtonView: UIView {
+    private let onChange: (Bool) -> Void
+    private let label = UILabel()
+    private let background = UIVisualEffectView(effect: UIGlassEffect())
+    private var touching = 0
+
+    init(title: String, onChange: @escaping (Bool) -> Void) {
+        self.onChange = onChange
+        super.init(frame: .zero)
+        isMultipleTouchEnabled = true
+        background.frame = bounds
+        background.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        background.isUserInteractionEnabled = false
+        background.layer.cornerRadius = 18
+        background.clipsToBounds = true
+        addSubview(background)
+        label.text = title
+        label.font = .preferredFont(forTextStyle: .headline)
+        label.textColor = .white
+        label.textAlignment = .center
+        label.frame = bounds
+        label.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        addSubview(label)
+        isAccessibilityElement = true
+        accessibilityLabel = "\(title) mouse button"
+        accessibilityTraits = .button
+    }
+
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        if touching == 0 { set(down: true) }
+        touching += touches.count
+    }
+
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) { lifted(touches) }
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) { lifted(touches) }
+
+    private func lifted(_ touches: Set<UITouch>) {
+        touching = max(touching - touches.count, 0)
+        if touching == 0 { set(down: false) }
+    }
+
+    private func set(down: Bool) {
+        UIView.animate(withDuration: 0.1) {
+            self.background.alpha = down ? 0.5 : 1
+            self.transform = down ? CGAffineTransform(scaleX: 0.97, y: 0.97) : .identity
+        }
+        if down { UIImpactFeedbackGenerator(style: .light).impactOccurred() }
+        onChange(down)
+    }
+
+    /// VoiceOver: a click.
+    override func accessibilityActivate() -> Bool {
+        onChange(true)
+        onChange(false)
+        return true
     }
 }

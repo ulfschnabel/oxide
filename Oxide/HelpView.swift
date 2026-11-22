@@ -17,6 +17,16 @@ struct HelpView: View {
             }
 
             Section {
+                Text("Trackpad mode with Left and Right mouse buttons along the bottom, like a laptop.")
+                    .foregroundStyle(.secondary)
+                gesture("computermouse", "Hold Left, move another finger", "Drag: select text, move windows, draw")
+                gesture("computermouse", "Hold Right, move another finger", "Right-drag")
+                gesture("hand.tap", "Tap a button", "Click; tapping the trackpad area clicks too")
+            } header: {
+                Label("Trackpad + buttons", systemImage: "computermouse")
+            }
+
+            Section {
                 Text("Like a touchscreen: you act where you touch. Quick for buttons and links.")
                     .foregroundStyle(.secondary)
                 gesture("hand.tap", "Tap", "Click there")
@@ -26,7 +36,7 @@ struct HelpView: View {
             } header: {
                 Label("Touch mode", systemImage: "hand.point.up.left")
             } footer: {
-                Text("Switch modes with the hand button at the top of the screen.")
+                Text("Switch modes with the mode button at the top of the screen: trackpad, trackpad + buttons, touch.")
             }
 
             Section {

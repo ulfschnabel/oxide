@@ -10,10 +10,26 @@ let inputLog = Logger(subsystem: "com.ulfschnabel.duodesk", category: "input")
 /// the cursor the trackpad mode moves.
 @MainActor @Observable
 final class InputController {
-    enum Mode { case trackpad, touch }
+    /// Trackpad; trackpad with on-screen mouse buttons; touch.
+    enum Mode: CaseIterable { case trackpad, buttons, touch }
 
-    var mode: Mode = UserDefaults.standard.string(forKey: SettingsKey.inputMode) == InputMode.touch.rawValue
-        ? .touch : .trackpad
+    var mode: Mode = {
+        switch UserDefaults.standard.string(forKey: SettingsKey.inputMode) {
+        case InputMode.touch.rawValue: .touch
+        case InputMode.buttons.rawValue: .buttons
+        default: .trackpad
+        }
+    }()
+
+    /// Fingers move the pointer (trackpad, buttons) rather than act where they touch.
+    var movesPointer: Bool { mode != .touch }
+
+    /// The next mode, for the toolbar button.
+    func cycleMode() {
+        let all = Mode.allCases
+        mode = all[(all.firstIndex(of: mode)! + 1) % all.count]
+        if mode == .touch { releaseButtons() }
+    }
     var keyboardShown = false
     private(set) var modifiers = StickyModifiers()
     private(set) var cursor: VirtualCursor
@@ -29,6 +45,8 @@ final class InputController {
 
     private let sendMessages: ([Hbb_Message]) -> Void
     private var dragging = false
+    /// The on-screen mouse buttons held down.
+    private(set) var buttons = HeldButtons()
 
     init(display: DisplayRect, send: @escaping ([Hbb_Message]) -> Void) {
         cursor = VirtualCursor(display: display)
@@ -117,6 +135,27 @@ final class InputController {
         send([Input.button(.left, down: false)])
     }
 
+    /// An on-screen mouse button pressed: down at the cursor, held until released.
+    func buttonPressed(_ button: MouseButton) {
+        let mods = takeModifiers()
+        send(buttons.press(button, at: cursor.hostPoint, modifiers: mods))
+    }
+
+    func buttonReleased(_ button: MouseButton) {
+        send(buttons.release(button))
+    }
+
+    /// Nothing stays pressed on the host: a drag or held buttons. For when
+    /// the session is hidden, paused or closed.
+    func releaseAll() {
+        dragEnded()
+        releaseButtons()
+    }
+
+    private func releaseButtons() {
+        send(buttons.releaseAll())
+    }
+
     /// Two fingers moving: content follows the fingers.
     func scroll(by delta: CGPoint) {
         let dx = Int32((delta.x * scrollSpeed).rounded())
@@ -128,7 +167,8 @@ final class InputController {
     /// The host moved its cursor (someone at the machine, or the host warping it).
     func hostCursorMoved(x: Int32, y: Int32) {
         inputLog.debug("host cursor at \(x),\(y) (display \(self.display.width)x\(self.display.height))")
-        guard !dragging else { return }
+        // During a drag the cursor is ours; the host's reports lag behind.
+        guard !dragging, !buttons.any else { return }
         cursor.move(to: (x, y))
     }
 

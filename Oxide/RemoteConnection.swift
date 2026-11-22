@@ -186,7 +186,7 @@ final class RemoteConnection {
     /// gets a close reason forgets the session, and a reconnect couldn't use it.
     @discardableResult
     private func closeSession() -> Task<Void, Never> {
-        input.dragEnded()
+        input.releaseAll()
         outbox?.finish()
         outbox = nil
         let session = session
@@ -358,7 +358,7 @@ final class RemoteConnection {
         guard !inBackground, phase != .ended else { return }
         inBackground = true
         capturePlaceholder()
-        input.dragEnded()
+        input.releaseAll()
         if case .reconnecting = phase {
             reconnectTask?.cancel()
             phase = .paused
@@ -418,7 +418,7 @@ final class RemoteConnection {
     func hide() {
         guard shown else { return }
         capturePlaceholder()
-        input.dragEnded()
+        input.releaseAll()
         // Its view leaves the window and iOS drops the keyboard with it.
         input.keyboardShown = false
         shown = false
@@ -599,7 +599,7 @@ final class RemoteConnection {
     func disconnect() async {
         note("disconnect")
         // Release a held button while input still goes out.
-        input.dragEnded()
+        input.releaseAll()
         // Nothing may bring the session back from here on.
         shutDown()
         outbox?.finish()

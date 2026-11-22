@@ -107,3 +107,35 @@ public enum Input {
         }
     }
 }
+
+/// On-screen mouse buttons held down: each press sends one down, each
+/// release one up, and nothing is left pressed on the host.
+public struct HeldButtons: Sendable {
+    private var held: [MouseButton] = []
+
+    public init() {}
+
+    public func isHeld(_ button: MouseButton) -> Bool { held.contains(button) }
+    public var any: Bool { !held.isEmpty }
+
+    /// Down where the cursor is (the host doesn't move on a press, so it's
+    /// positioned first). Nothing if it's down already.
+    public mutating func press(_ button: MouseButton, at point: (Int32, Int32),
+                               modifiers: [Hbb_ControlKey] = []) -> [Hbb_Message] {
+        guard !held.contains(button) else { return [] }
+        held.append(button)
+        return [Input.move(point.0, point.1, modifiers: modifiers),
+                Input.button(button, down: true, modifiers: modifiers)]
+    }
+
+    public mutating func release(_ button: MouseButton) -> [Hbb_Message] {
+        guard let i = held.firstIndex(of: button) else { return [] }
+        held.remove(at: i)
+        return [Input.button(button, down: false)]
+    }
+
+    public mutating func releaseAll() -> [Hbb_Message] {
+        defer { held.removeAll() }
+        return held.map { Input.button($0, down: false) }
+    }
+}

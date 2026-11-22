@@ -75,11 +75,20 @@ def serve(conn, addr, password, frames):
             time.sleep(1 / 30)
 
 
+LOG_MOUSE = False
+
+
 def listen(conn, addr, reader, lock):
     """Answers resolution changes like a real host: SwitchDisplay with the new
     size if the mode is listed, silence if not."""
     while True:
         m, _ = reader.next()
+        if LOG_MOUSE and m.WhichOneof("union") == "mouse_event":
+            e = m.mouse_event
+            kind = {0: "move", 1: "down", 2: "up", 3: "wheel", 4: "trackpad"}.get(e.mask & 7, e.mask & 7)
+            button = {1: "left", 2: "right", 4: "middle"}.get(e.mask >> 3, "")
+            print(f"{addr}: mouse {kind} {button} {e.x},{e.y}".replace("  ", " "), flush=True)
+            continue
         if m.WhichOneof("union") != "misc" or m.misc.WhichOneof("union") != "change_display_resolution":
             continue
         req = m.misc.change_display_resolution
@@ -103,7 +112,10 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("--password", required=True)
     p.add_argument("--port", type=int, default=21118)
+    p.add_argument("--log-mouse", action="store_true", help="print the mouse events the client sends")
     args = p.parse_args()
+    global LOG_MOUSE
+    LOG_MOUSE = args.log_mouse
     frames = [(f.read_bytes(), "-key" in f.name) for f in sorted(FIXTURES.glob("h264-*.bin"))]
     srv = socket.create_server(("0.0.0.0", args.port), reuse_port=True)
     print(f"fake host on :{args.port}, {len(frames)} frames")

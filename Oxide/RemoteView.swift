@@ -47,10 +47,7 @@ struct RemoteView: View {
                         input.viewport.reset()
                     }
                 }
-                Button(input.mode == .trackpad ? "Trackpad" : "Touch",
-                       systemImage: input.mode == .trackpad ? "rectangle.and.hand.point.up.left" : "hand.point.up.left") {
-                    input.mode = input.mode == .trackpad ? .touch : .trackpad
-                }
+                Button(modeTitle, systemImage: modeSymbol) { input.cycleMode() }
                 Button("Help", systemImage: "questionmark") { showHelp = true }
                 Button("Settings", systemImage: "gearshape") { showSettings = true }
                 Button("Keyboard", systemImage: input.keyboardShown ? "keyboard.chevron.compact.down" : "keyboard") {
@@ -94,6 +91,22 @@ struct RemoteView: View {
         }
         .onChange(of: matchResolution) { connection.resolutionSettingsChanged() }
         .onChange(of: textSize) { connection.resolutionSettingsChanged() }
+    }
+
+    private var modeTitle: String {
+        switch connection.input.mode {
+        case .trackpad: "Trackpad"
+        case .buttons: "Trackpad + buttons"
+        case .touch: "Touch"
+        }
+    }
+
+    private var modeSymbol: String {
+        switch connection.input.mode {
+        case .trackpad: "rectangle.and.hand.point.up.left"
+        case .buttons: "computermouse"
+        case .touch: "hand.point.up.left"
+        }
     }
 
     private var isReconnecting: Bool {

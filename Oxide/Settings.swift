@@ -25,10 +25,16 @@ enum TextSize: String, CaseIterable, Identifiable {
 }
 
 enum InputMode: String, CaseIterable, Identifiable {
-    case trackpad, touch
+    case trackpad, buttons, touch
 
     var id: String { rawValue }
-    var title: String { self == .trackpad ? "Trackpad" : "Touch" }
+    var title: String {
+        switch self {
+        case .trackpad: "Trackpad"
+        case .buttons: "Trackpad + buttons"
+        case .touch: "Touch"
+        }
+    }
 }
 
 enum SettingsKey {
