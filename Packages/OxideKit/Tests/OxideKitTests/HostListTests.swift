@@ -77,7 +77,7 @@ struct HostListTests {
         let root = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
         let host = try #require((root["hosts"] as? [[String: Any]])?.first)
         // Only these fields: nothing that could hold a password.
-        #expect(Set(host.keys) == ["id", "name", "address", "passwordKind", "createdAt"])
+        #expect(Set(host.keys) == ["id", "name", "address", "passwordKind", "createdAt", "modifiedAt"])
     }
 
     @Test func newHostsUseTheKindGiven() throws {

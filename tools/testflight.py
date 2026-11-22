@@ -69,12 +69,44 @@ def distribution_cert_id():
     sys.exit(f"local distribution cert {sha1} not found in ASC")
 
 
+# Capabilities the app ID needs, and an entitlement each must put in the profile.
+CAPABILITIES = {
+    # The saved computers sync through iCloud's key-value store.
+    "ICLOUD": ("com.apple.developer.ubiquity-kvstore-identifier",
+               [{"key": "ICLOUD_VERSION", "options": [{"key": "XCODE_6"}]}]),
+}
+
+
+def ensure_capabilities(bundle_id):
+    have = {c["attributes"]["capabilityType"]
+            for c in call("GET", f"/bundleIds/{bundle_id}/bundleIdCapabilities")["data"]}
+    for kind, (_, settings) in CAPABILITIES.items():
+        if kind in have:
+            continue
+        call("POST", "/bundleIdCapabilities", {"data": {"type": "bundleIdCapabilities",
+            "attributes": {"capabilityType": kind, "settings": settings},
+            "relationships": {"bundleId": {"data": {"type": "bundleIds", "id": bundle_id}}}}})
+        log(f"capability {kind} enabled")
+
+
 def ensure_profile(bundle, cert_id):
-    """Create (or reuse) the '<bundle> AppStore' profile and install it."""
+    """Create (or reuse) the '<bundle> AppStore' profile and install it. A
+    profile made before a capability was added lacks its entitlement: it's
+    replaced."""
     bundle_id = call("GET", f"/bundleIds?filter[identifier]={bundle}")["data"][0]["id"]
+    ensure_capabilities(bundle_id)
     name = f"{bundle} AppStore"
-    existing = [p for p in call("GET", f"/bundleIds/{bundle_id}/profiles")["data"]
-                if p["attributes"]["name"] == name and p["attributes"]["profileState"] == "ACTIVE"]
+    needed = [entitlement.encode() for entitlement, _ in CAPABILITIES.values()]
+    existing = []
+    for p in call("GET", f"/bundleIds/{bundle_id}/profiles")["data"]:
+        if p["attributes"]["name"] != name:
+            continue
+        content = base64.b64decode(p["attributes"]["profileContent"])
+        if p["attributes"]["profileState"] == "ACTIVE" and all(e in content for e in needed):
+            existing.append(p)
+        else:
+            call("DELETE", f"/profiles/{p['id']}")
+            log(f"profile {p['attributes']['uuid']} removed (outdated)")
     profile = existing[0] if existing else call("POST", "/profiles", {"data": {"type": "profiles",
         "attributes": {"name": name, "profileType": "IOS_APP_STORE"},
         "relationships": {"bundleId": {"data": {"type": "bundleIds", "id": bundle_id}},
@@ -97,7 +129,7 @@ def run_logged(cmd, logfile):
 def archive():
     run_logged(["xcodegen", "generate", "-q"], "build-xcodegen.log")
     run_logged(["xcodebuild", "archive", "-project", "Oxide.xcodeproj", "-scheme", "Oxide", "-configuration", "Release",
-                "-destination", "generic/platform=iOS", "-archivePath", str(ARCHIVE)], "build-archive.log")
+                "-destination", "generic/platform=iOS", "-archivePath", str(ARCHIVE), *AUTH], "build-archive.log")
     log("archived")
 
 

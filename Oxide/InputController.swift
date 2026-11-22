@@ -136,6 +136,22 @@ final class InputController {
     /// as it does here, wherever the pointer is.
     func pointerButtons(_ pressed: Set<MouseButton>, at point: CGPoint) {
         cursor.move(to: host(point))
+        touchButtons = pressed
+        applyPointerButtons()
+    }
+
+    /// A button reported by the GameController mouse (on a Mac, where only
+    /// the primary button arrives as a touch).
+    func extraButton(_ button: MouseButton, down: Bool) {
+        if down { extraButtons.insert(button) } else { extraButtons.remove(button) }
+        applyPointerButtons()
+    }
+
+    private var touchButtons: Set<MouseButton> = []
+    private var extraButtons: Set<MouseButton> = []
+
+    private func applyPointerButtons() {
+        let pressed = touchButtons.union(extraButtons)
         // The bar's modifiers go with a new press, and are used up by it.
         let pressing = !pressed.isSubset(of: pointerButtons.down)
         send(pointerButtons.set(pressed, at: cursor.hostPoint, modifiers: pressing ? takeModifiers() : []))
@@ -167,6 +183,8 @@ final class InputController {
     func releaseAll() {
         dragEnded()
         releaseButtons()
+        touchButtons = []
+        extraButtons = []
         send(pointerButtons.releaseAll())
         send(keys.releaseAll())
     }

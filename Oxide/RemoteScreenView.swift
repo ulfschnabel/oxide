@@ -1,4 +1,5 @@
 import AVFoundation
+import GameController
 import OxideKit
 import SwiftUI
 import UIKit
@@ -88,6 +89,9 @@ final class RemoteScreenView: UIView, UIGestureRecognizerDelegate, UIPointerInte
         addButtons()
         addGestures()
         addInteraction(UIPointerInteraction(delegate: self))
+        #if targetEnvironment(macCatalyst)
+        watchMice()
+        #endif
         softInput.onResign = { [weak self] in self?.input.keyboardShown = false }
         NotificationCenter.default.addObserver(self, selector: #selector(appWillResignActive),
                                                name: UIApplication.willResignActiveNotification, object: nil)
@@ -371,10 +375,54 @@ final class RemoteScreenView: UIView, UIGestureRecognizerDelegate, UIPointerInte
     }
 
     @objc private func hovering(_ g: UIHoverGestureRecognizer) {
-        if g.state == .changed || g.state == .began {
+        switch g.state {
+        case .began, .changed:
+            pointerInside = true
             input.pointerMoved(to: g.location(in: self))
+        default:
+            pointerInside = false
         }
     }
+
+    /// The pointer is over the picture (hovering or with a button down).
+    private var pointerInside = false
+
+    #if targetEnvironment(macCatalyst)
+    /// On a Mac only the primary button arrives as a touch; a secondary click
+    /// becomes a context-menu request. The others come from GameController's
+    /// mouse, while the pointer is over the picture in the front window.
+    private func watchMice() {
+        GCMouse.mice().forEach(watch)
+        NotificationCenter.default.addObserver(self, selector: #selector(mouseConnected),
+                                               name: .GCMouseDidConnect, object: nil)
+    }
+
+    @objc private func mouseConnected(_ note: Notification) {
+        if let mouse = note.object as? GCMouse { watch(mouse) }
+    }
+
+    private func watch(_ mouse: GCMouse) {
+        guard let m = mouse.mouseInput else { return }
+        let buttons: [(GCControllerButtonInput?, MouseButton)] = [
+            (m.rightButton, .right), (m.middleButton, .middle),
+            (m.auxiliaryButtons?.first, .back), (m.auxiliaryButtons?.dropFirst().first, .forward),
+        ]
+        for (control, button) in buttons {
+            control?.pressedChangedHandler = { [weak self] _, _, pressed in
+                MainActor.assumeIsolated { self?.extraButton(button, pressed: pressed) }
+            }
+        }
+    }
+
+    private func extraButton(_ button: MouseButton, pressed: Bool) {
+        // A press elsewhere isn't for the host; a release always goes, so
+        // nothing stays down.
+        if pressed {
+            guard pointerInside, window?.isKeyWindow == true else { return }
+        }
+        input.extraButton(button, down: pressed)
+    }
+    #endif
 
     // MARK: Keyboard
 

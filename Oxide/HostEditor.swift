@@ -65,7 +65,7 @@ struct HostEditor: View {
                     case .oneTime:
                         Text("RustDesk's default. It shows a one-time password on that computer and makes a new one after each connection. Oxide asks for it every time you connect.")
                     case .permanent:
-                        Text("The password set in RustDesk on that computer (Settings → Security → Set permanent password). It's kept in this device's keychain and only used to log in.")
+                        Text("The password set in RustDesk on that computer (Settings → Security → Set permanent password). It's kept in your keychain, synced to your other devices through iCloud Keychain, and only used to log in.")
                     }
                 }
 

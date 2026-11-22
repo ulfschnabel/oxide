@@ -16,8 +16,9 @@ a foldable, the iPhone Duo.
   pointer.
 - **Stays connected.** The session survives a quick trip to another app, and
   reconnects by itself when the connection drops or you come back later.
-- **Saved computers.** Names and addresses are kept on the device. Passwords
-  go in the keychain and are never synced.
+- **Saved computers, on all your devices.** The list syncs through iCloud, and
+  passwords through iCloud Keychain (end-to-end encrypted). Without iCloud
+  everything stays on the device.
 
 > Oxide is an independent project and is not affiliated with or endorsed by
 > RustDesk or Purslane Ltd. "RustDesk" is their trademark.
