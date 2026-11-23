@@ -41,7 +41,7 @@ struct HostEditor: View {
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                         .submitLabel(passwordKind == .permanent ? .next : .done)
-                        .onSubmit { if passwordKind == .permanent { passwordFocused = true } }
+                        .onSubmit { if passwordKind == .permanent { passwordFocused = true } else { focus = nil } }
                 } footer: {
                     if !address.isEmpty && !addressValid {
                         Text("Use a host name or IP address, optionally with :port (1–65535).")
@@ -213,11 +213,12 @@ extension View {
         }
     }
 
-    /// A sheet as tall as its form, where sheets are free-sized (a Mac, an
-    /// iPad): a fixed form-sheet size shows a scroll bar once a section
+    /// A sheet as tall as its form where sheets are free-sized (a Mac, an
+    /// iPad), instead of a fixed form-sheet size that scrolls once a section
     /// grows. iPhone sheets keep their detents.
     func fittedSheet(height: CGFloat) -> some View {
-        frame(idealHeight: height > 0 ? height : nil)
+        // Plus room under the last footer, which the content size leaves out.
+        frame(idealHeight: height > 0 ? height + 24 : nil)
             .presentationSizing(.form.fitted(horizontal: false, vertical: true))
     }
 }
