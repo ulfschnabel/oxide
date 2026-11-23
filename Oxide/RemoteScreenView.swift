@@ -15,6 +15,11 @@ struct RemoteScreen: UIViewRepresentable {
     let input: InputController
     /// A three-finger swipe: +1 for the next session, -1 for the previous.
     var onSwitch: (Int) -> Void = { _ in }
+    /// One of two panes: the resolution fits the pane, not the window.
+    var fitsOwnSize = false
+    /// The pane hardware keys go to (of two, the one last touched).
+    var takesKeys = true
+    var onTouched: () -> Void = {}
 
     func makeUIView(context: Context) -> RemoteScreenView {
         let view = RemoteScreenView(videoLayer: connection.renderer, input: input)
@@ -27,6 +32,9 @@ struct RemoteScreen: UIViewRepresentable {
 
     func updateUIView(_ view: RemoteScreenView, context: Context) {
         view.onSwitch = onSwitch
+        view.onTouched = onTouched
+        view.fitsOwnSize = fitsOwnSize
+        view.takesKeys = takesKeys
         view.showsButtons = input.mode == .buttons
         view.videoSize = connection.videoSize
         view.placeholder = connection.placeholder
@@ -59,6 +67,13 @@ final class RemoteScreenView: UIView, UIGestureRecognizerDelegate, UIPointerInte
     /// The window, not this view, so the keyboard showing doesn't count.
     var onScreenChange: ((CGSize, CGFloat) -> Void)?
     var onSwitch: ((Int) -> Void)?
+    var onTouched: (() -> Void)?
+    var fitsOwnSize = false {
+        didSet { if fitsOwnSize != oldValue { setNeedsLayout() } }
+    }
+    var takesKeys = true {
+        didSet { if takesKeys, !oldValue { takeKeys() } }
+    }
     private let videoLayer: AVSampleBufferDisplayLayer
     private let input: InputController
     private lazy var accessory: UIView = {
@@ -119,11 +134,12 @@ final class RemoteScreenView: UIView, UIGestureRecognizerDelegate, UIPointerInte
         if let window {
             #if targetEnvironment(macCatalyst)
             // Below the title bar, where the picture goes on a Mac.
-            let size = window.bounds.inset(by: window.safeAreaInsets).size
+            let windowSize = window.bounds.inset(by: window.safeAreaInsets).size
             #else
-            let size = window.bounds.size
+            let windowSize = window.bounds.size
             #endif
-            onScreenChange?(size, window.traitCollection.displayScale)
+            // A pane of a split: its own size (the split ignores the keyboard).
+            onScreenChange?(fitsOwnSize ? bounds.size : windowSize, window.traitCollection.displayScale)
         }
     }
 
@@ -344,6 +360,7 @@ final class RemoteScreenView: UIView, UIGestureRecognizerDelegate, UIPointerInte
     // A hardware pointer's buttons, as they go down and up: any button, held
     // as long as it's held (hover moves the pointer while none is down).
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        onTouched?()
         pointer(touches, event, ended: false)
         super.touchesBegan(touches, with: event)
     }
@@ -459,7 +476,7 @@ final class RemoteScreenView: UIView, UIGestureRecognizerDelegate, UIPointerInte
     /// Makes the right responder first (after a sheet with its own text
     /// field, too).
     func takeKeys() {
-        guard window != nil else { return }
+        guard window != nil, takesKeys else { return }
         let responder: UIResponder = softKeyboard ? softInput : self
         guard !responder.isFirstResponder else { return }
         // A sheet or alert over the session keeps its own focus; look again

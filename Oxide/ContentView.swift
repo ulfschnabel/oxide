@@ -15,7 +15,22 @@ struct ContentView: View {
 
     var body: some View {
         Group {
-            if isMain, let session = open.shown {
+            if isMain, let top = open.shown, let bottom = open.secondShown {
+                // Two at once: stacked upright, side by side across.
+                GeometryReader { geo in
+                    let stacked = geo.size.height >= geo.size.width
+                    let layout = stacked ? AnyLayout(VStackLayout(spacing: 2)) : AnyLayout(HStackLayout(spacing: 2))
+                    layout {
+                        pane(top, 0)
+                        pane(bottom, 1)
+                    }
+                }
+                // The panes keep their size, and their remote resolution, when
+                // the on-screen keyboard comes up.
+                .ignoresSafeArea(.keyboard)
+                .background(Color(uiColor: .sessionBackground))
+                .statusBarHidden()
+            } else if isMain, let session = open.shown {
                 RemoteView(
                     connection: session.connection, host: session.host, position: open.ring.position,
                     onNewPassword: { password, remember in
@@ -28,7 +43,9 @@ struct ContentView: View {
                         Task { withAnimation(.snappy) { open.step(offset) } }
                     },
                     onShowList: { open.showList() },
-                    onClose: { open.close(session.id) })
+                    onClose: { open.close(session.id) },
+                    canSplit: open.canSplit,
+                    onToggleSplit: { open.split() })
                     .id(session.id)
                     .transition(.push(from: open.lastStep < 0 ? .leading : .trailing))
             } else {
@@ -57,6 +74,11 @@ struct ContentView: View {
         .onChange(of: open.mainWindow) { _, main in
             if main == nil { open.claimMainWindow(token) }
         }
+        // Where windows show one at a time (a phone keeping several, like the
+        // Duo), the one on screen is the main one.
+        .onChange(of: scenePhase, initial: true) { _, phase in
+            if phase == .active, !Windows.available { open.takeMainWindow(token) }
+        }
         .onDisappear { open.releaseMainWindow(token) }
         .task { diag("windows of their own: \(Windows.available ? "yes" : "no")") }
         // Every session of the main window goes to the background and comes
@@ -75,9 +97,29 @@ struct ContentView: View {
 }
 
 extension ContentView {
+    /// One of two panes.
+    fileprivate func pane(_ session: OpenSessions.Entry, _ index: Int) -> some View {
+        RemoteView(
+            connection: session.connection, host: session.host,
+            onNewPassword: { password, remember in
+                if remember, let host = session.host { library.remember(password, for: host) }
+            },
+            onSwitch: { offset in open.step(offset, pane: index) },
+            onShowList: { open.showList() },
+            onClose: { open.close(session.id) },
+            isSplit: true,
+            onToggleSplit: { open.unsplit() },
+            isActivePane: open.activePane == index,
+            onActivate: { if open.activePane != index { open.activePane = index } })
+            // Equal halves, whatever each pane's content would like.
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .id(session.id)
+    }
+
     /// Opens the session's window. Where no window appears (a device that
     /// turns out to have only one), the session comes back here.
     fileprivate func openInWindow(_ id: UUID) {
+        open.windowRequested(id)
         openWindow(value: id)
         Task {
             try? await Task.sleep(for: .seconds(2))
@@ -90,10 +132,13 @@ extension ContentView {
 }
 
 /// Where sessions can have windows of their own: a Mac (always) and an iPad
-/// (on request); an iPhone has one window.
+/// (on request). A phone, even one that keeps several windows (the Duo),
+/// shows one at a time: two sessions go side by side in one window instead.
 @MainActor
 enum Windows {
-    static var available: Bool { UIApplication.shared.supportsMultipleScenes }
+    static var available: Bool {
+        UIApplication.shared.supportsMultipleScenes && UIDevice.current.userInterfaceIdiom != .phone
+    }
     static var byDefault: Bool {
         #if targetEnvironment(macCatalyst)
         true
@@ -123,6 +168,34 @@ final class OpenSessions {
     private(set) var lastStep = 1
 
     var shown: Entry? { listShown ? nil : ring.current.flatMap { entries[$0] } }
+    /// The session in the second pane, when two are on screen.
+    var secondShown: Entry? { listShown ? nil : ring.second.flatMap { entries[$0] } }
+    /// Of two panes, the one keys go to (0: the first).
+    var activePane = 0
+
+    var canSplit: Bool { ring.ids.count > 1 && ring.second == nil }
+
+    /// Shows the next session in a second pane.
+    func split() {
+        guard let id = ring.split() else { return }
+        activePane = 0
+        entries[id]?.connection.reveal()
+    }
+
+    /// Back to one session on screen: the first pane's.
+    func unsplit() {
+        secondShown?.connection.hide()
+        ring.unsplit()
+        activePane = 0
+    }
+
+    /// A three-finger swipe in one of two panes.
+    func step(_ offset: Int, pane: Int) {
+        let old = pane == 0 ? ring.current : ring.second
+        guard let new = ring.step(offset, pane: pane) else { return }
+        old.flatMap { entries[$0] }?.connection.hide()
+        entries[new]?.connection.reveal()
+    }
     var all: [Entry] { Array(entries.values) }
     var hostIDs: Set<UUID> { Set(entries.values.compactMap(\.host?.id)) }
 
@@ -147,18 +220,31 @@ final class OpenSessions {
     func claimMainWindow(_ token: UUID) {
         guard mainWindow == nil else { return }
         mainWindow = token
-        if !listShown { shown?.connection.reveal() }
+        if !listShown {
+            shown?.connection.reveal()
+            secondShown?.connection.reveal()
+        }
+    }
+
+    func takeMainWindow(_ token: UUID) {
+        mainWindow = token
     }
 
     func releaseMainWindow(_ token: UUID) {
         guard mainWindow == token else { return }
         // Off screen until another window takes over.
         shown?.connection.hide()
+        secondShown?.connection.hide()
         mainWindow = nil
     }
 
-    /// Sessions whose window has appeared.
+    /// Sessions a window was asked for in this run, and those whose window
+    /// has appeared. Only those windows show a session: a window restored
+    /// from an earlier run never takes one over.
+    private(set) var windowsRequested: Set<UUID> = []
     private var windowsShown: Set<UUID> = []
+
+    func windowRequested(_ id: UUID) { windowsRequested.insert(id) }
 
     func windowAppeared(_ id: UUID) { windowsShown.insert(id) }
     func hasWindow(_ id: UUID) -> Bool { windowsShown.contains(id) }
@@ -176,7 +262,7 @@ final class OpenSessions {
     /// Takes a session out of the main window, for a window of its own.
     func moveToWindow(_ id: UUID) {
         guard var entry = entries[id], !entry.inWindow else { return }
-        if ring.current == id, !listShown { entry.connection.hide() }
+        if ring.current == id || ring.second == id, !listShown { entry.connection.hide() }
         entry.inWindow = true
         entries[id] = entry
         ring.close(id)
@@ -196,6 +282,7 @@ final class OpenSessions {
         ring.open(target)
         listShown = false
         entries[target]?.connection.reveal()
+        secondShown?.connection.reveal()
     }
 
     /// Sets the slide direction for the switch that follows.
@@ -213,6 +300,7 @@ final class OpenSessions {
 
     func showList() {
         shown?.connection.hide()
+        secondShown?.connection.hide()
         listShown = true
     }
 
@@ -220,9 +308,14 @@ final class OpenSessions {
     func close(_ id: UUID) {
         guard let entry = entries.removeValue(forKey: id) else { return }
         windowsShown.remove(id)
+        windowsRequested.remove(id)
         Task { await entry.connection.disconnect() }
         ring.close(id)
-        if !listShown { shown?.connection.reveal() }
+        if !listShown {
+            shown?.connection.reveal()
+            secondShown?.connection.reveal()
+        }
+        if ring.second == nil { activePane = 0 }
         if ring.ids.isEmpty { listShown = false }
     }
 }

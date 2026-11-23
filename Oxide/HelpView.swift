@@ -64,6 +64,8 @@ struct HelpView: View {
                 gesture("rectangle.portrait.rotate", "Rotate, fold or resize", "With Settings → Match the remote screen on, the remote computer switches to a resolution that fits; it switches back when you disconnect")
                 gesture("rectangle.stack", "Computers button", "Back to the list with the session left open, to open another")
                 gesture("hand.draw", "Swipe three fingers left or right", "Switch between open sessions")
+                gesture("rectangle.split.1x2", "Split", "Two open sessions at once: one above the other upright, side by side across. Keys go to the one you touched last (outlined). Back to one with ⋯ → Single.")
+                gesture("macwindow.badge.plus", "Open in New Window (iPad)", "A computer's menu in the list: its session in a window of its own, for Split View or Stage Manager. On a Mac every session is a tab.")
                 gesture("xmark", "Close button", "Disconnect this session")
                 gesture("arrow.triangle.2.circlepath", "Switching apps", "The session stays up for a while (Settings → In the Background), then pauses and reconnects when you come back")
             } header: {

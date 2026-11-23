@@ -14,6 +14,13 @@ struct RemoteView: View {
     /// The list of computers, with this session left open.
     var onShowList: () -> Void = {}
     var onClose: () -> Void
+    /// Two sessions could be on screen (offers Split), or are (offers Single).
+    var canSplit = false
+    var isSplit = false
+    var onToggleSplit: () -> Void = {}
+    /// Of two panes, the one keys go to; touching a pane makes it the one.
+    var isActivePane = true
+    var onActivate: () -> Void = {}
     @AppStorage(SettingsKey.matchResolution) private var matchResolution = true
     @AppStorage(SettingsKey.textSize) private var textSize: TextSize = .balanced
     @State private var showSettings = false
@@ -23,7 +30,8 @@ struct RemoteView: View {
     var body: some View {
         let input = connection.input
         ZStack(alignment: .top) {
-            RemoteScreen(connection: connection, input: input, onSwitch: onSwitch)
+            RemoteScreen(connection: connection, input: input, onSwitch: onSwitch,
+                         fitsOwnSize: isSplit, takesKeys: isActivePane, onTouched: onActivate)
                 .ignoresSafeArea(edges: Self.pictureEdges)
             if isReconnecting {
                 waiting("Reconnecting…")
@@ -53,26 +61,50 @@ struct RemoteView: View {
                 if let status = connection.status {
                     Text(status).font(.footnote)
                 }
-                Spacer()
+                Spacer(minLength: 0)
                 if input.viewport.isZoomed {
                     Button("Fit", systemImage: "arrow.down.right.and.arrow.up.left") {
                         input.viewport.reset()
                     }
                 }
-                Button(modeTitle, systemImage: modeSymbol) { input.cycleMode() }
-                Button("Help", systemImage: "questionmark") { showHelp = true }
-                Button("Settings", systemImage: "gearshape") { showSettings = true }
-                Button("Keyboard", systemImage: input.keyboardShown ? "keyboard.chevron.compact.down" : "keyboard") {
-                    input.keyboardShown.toggle()
+                if isSplit {
+                    // Half the screen: the keyboard, and the rest in a menu.
+                    keyboardButton
+                    Menu("More", systemImage: "ellipsis") {
+                        // (A touch on this pane's toolbar makes it the active one too.)
+                        Button("Single", systemImage: "rectangle") { onToggleSplit() }
+                        Button(modeTitle, systemImage: modeSymbol) { input.cycleMode() }
+                        Button("Settings", systemImage: "gearshape") { showSettings = true }
+                        Button("Help", systemImage: "questionmark") { showHelp = true }
+                        Button("Disconnect", systemImage: "xmark", role: .destructive) { close() }
+                    }
+                } else {
+                    if canSplit {
+                        Button("Split", systemImage: "rectangle.split.1x2") { onToggleSplit() }
+                    }
+                    Button(modeTitle, systemImage: modeSymbol) { input.cycleMode() }
+                    Button("Help", systemImage: "questionmark") { showHelp = true }
+                    Button("Settings", systemImage: "gearshape") { showSettings = true }
+                    keyboardButton
+                    Button("Disconnect", systemImage: "xmark") { close() }
                 }
-                Button("Disconnect", systemImage: "xmark") { close() }
             }
             .labelStyle(.iconOnly)
             .buttonStyle(.glass)
+            .simultaneousGesture(TapGesture().onEnded { if isSplit { onActivate() } })
             .padding(.horizontal)
             .foregroundStyle(.white)
         }
         .background(Color(uiColor: .sessionBackground))
+        // Of two panes, the one the keyboard types into.
+        .overlay {
+            if isSplit && isActivePane {
+                // Around the picture, which reaches under the safe area.
+                Rectangle().strokeBorder(.tint.opacity(0.7), lineWidth: 2)
+                    .ignoresSafeArea(edges: Self.pictureEdges)
+                    .allowsHitTesting(false)
+            }
+        }
         .statusBarHidden()
         .sheet(isPresented: $showSettings) { SettingsView() }
         .sheet(isPresented: $showHelp) {
@@ -111,6 +143,14 @@ struct RemoteView: View {
     #else
     private static let pictureEdges: Edge.Set = [.top, .horizontal]
     #endif
+
+    private var keyboardButton: some View {
+        Button("Keyboard", systemImage: connection.input.keyboardShown ? "keyboard.chevron.compact.down" : "keyboard") {
+            // Of two panes, the keyboard is this one's: it becomes the one keys go to.
+            onActivate()
+            connection.input.keyboardShown.toggle()
+        }
+    }
 
     private var modeTitle: String {
         switch connection.input.mode {

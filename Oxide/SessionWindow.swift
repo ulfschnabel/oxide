@@ -11,7 +11,7 @@ struct SessionWindow: View {
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
-        if let id, let entry = open.entry(id) {
+        if let id, open.windowsRequested.contains(id), let entry = open.entry(id) {
             RemoteView(
                 connection: entry.connection, host: entry.host,
                 onNewPassword: { password, remember in
@@ -51,8 +51,14 @@ struct SessionWindow: View {
                 }
         } else {
             // A window restored after a relaunch, or one whose session ended.
+            #if targetEnvironment(macCatalyst)
             Color(uiColor: .sessionBackground)
                 .task { dismissWindow() }
+            #else
+            // iOS doesn't close it (it may be the only window): it becomes a
+            // list of computers instead of an empty screen.
+            ContentView(library: library, open: open)
+            #endif
         }
     }
 }
