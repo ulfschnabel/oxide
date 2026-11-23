@@ -1,15 +1,21 @@
 import OxideKit
 import SwiftUI
 
-/// The saved computers, or the remote screen of one of the open sessions.
+/// The saved computers, or the remote screen of one of the open sessions
+/// (those not in a window of their own).
 struct ContentView: View {
-    @State private var library = HostLibrary()
-    @State private var open = OpenSessions()
+    let library: HostLibrary
+    let open: OpenSessions
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.openWindow) private var openWindow
+    /// This window's claim on showing the main window's sessions: only one
+    /// window may (iPadOS lets the user make more of them).
+    @State private var token = UUID()
+    private var isMain: Bool { open.mainWindow == token }
 
     var body: some View {
         Group {
-            if let session = open.shown {
+            if isMain, let session = open.shown {
                 RemoteView(
                     connection: session.connection, host: session.host, position: open.ring.position,
                     onNewPassword: { password, remember in
@@ -26,16 +32,38 @@ struct ContentView: View {
                     .id(session.id)
                     .transition(.push(from: open.lastStep < 0 ? .leading : .trailing))
             } else {
-                HomeView(library: library, openHosts: open.hostIDs, hasOpenSessions: !open.all.isEmpty,
-                         onConnected: { host, connection in open.add(host: host, connection: connection) },
-                         onShowOpen: { host in open.show(host?.id) },
+                HomeView(library: library, openHosts: open.hostIDs,
+                         hasOpenSessions: isMain && !open.inMainWindow.isEmpty,
+                         canOpenWindows: Windows.available,
+                         // A second list window has no sessions of its own: it opens windows.
+                         windowByDefault: Windows.byDefault || (Windows.available && !isMain),
+                         onConnected: { host, connection, inWindow in
+                             let id = open.add(host: host, connection: connection, inWindow: inWindow)
+                             if inWindow { openInWindow(id) }
+                         },
+                         onShowOpen: { host, inWindow in
+                             if let id = host?.id, open.isInWindow(id) || inWindow {
+                                 open.moveToWindow(id)
+                                 openInWindow(id)
+                             } else {
+                                 open.show(host?.id)
+                             }
+                         },
                          onDeleted: { host in open.close(host.id) })
             }
         }
-        // Every open session goes to the background and comes back, not
-        // only the one on screen.
+        .background(SceneReader { if isMain { open.mainScene = $0 } })
+        .onAppear { open.claimMainWindow(token) }
+        .onChange(of: open.mainWindow) { _, main in
+            if main == nil { open.claimMainWindow(token) }
+        }
+        .onDisappear { open.releaseMainWindow(token) }
+        .task { diag("windows of their own: \(Windows.available ? "yes" : "no")") }
+        // Every session of the main window goes to the background and comes
+        // back, not only the one on screen. (Session windows see to their own.)
         .onChange(of: scenePhase) { _, phase in
-            for session in open.all {
+            guard isMain else { return }
+            for session in open.inMainWindow {
                 switch phase {
                 case .background: session.connection.enteredBackground()
                 case .active: session.connection.becameActive()
@@ -46,14 +74,45 @@ struct ContentView: View {
     }
 }
 
-/// The remote sessions that are open, and which one is on screen. The others
-/// stay connected but don't decode video.
+extension ContentView {
+    /// Opens the session's window. Where no window appears (a device that
+    /// turns out to have only one), the session comes back here.
+    fileprivate func openInWindow(_ id: UUID) {
+        openWindow(value: id)
+        Task {
+            try? await Task.sleep(for: .seconds(2))
+            if !open.hasWindow(id) {
+                diag("no window appeared for the session: shown here instead")
+                open.moveToMainWindow(id)
+            }
+        }
+    }
+}
+
+/// Where sessions can have windows of their own: a Mac (always) and an iPad
+/// (on request); an iPhone has one window.
+@MainActor
+enum Windows {
+    static var available: Bool { UIApplication.shared.supportsMultipleScenes }
+    static var byDefault: Bool {
+        #if targetEnvironment(macCatalyst)
+        true
+        #else
+        false
+        #endif
+    }
+}
+
+/// The remote sessions that are open, for the whole app. Each is either in
+/// the main window, which shows one at a time (the others stay connected but
+/// don't decode video), or in a window of its own.
 @MainActor @Observable
 final class OpenSessions {
     struct Entry: Identifiable {
         let id: UUID
         let host: SavedHost?
         let connection: RemoteConnection
+        var inWindow = false
     }
 
     private(set) var ring = SessionRing<UUID>()
@@ -64,14 +123,69 @@ final class OpenSessions {
     private(set) var lastStep = 1
 
     var shown: Entry? { listShown ? nil : ring.current.flatMap { entries[$0] } }
-    var all: [Entry] { ring.ids.compactMap { entries[$0] } }
+    var all: [Entry] { Array(entries.values) }
     var hostIDs: Set<UUID> { Set(entries.values.compactMap(\.host?.id)) }
 
-    func add(host: SavedHost?, connection: RemoteConnection) {
+    /// The session's id, which its window (if any) is opened with.
+    @discardableResult
+    func add(host: SavedHost?, connection: RemoteConnection, inWindow: Bool = false) -> UUID {
         let id = host?.id ?? UUID()
-        entries[id] = Entry(id: id, host: host, connection: connection)
+        entries[id] = Entry(id: id, host: host, connection: connection, inWindow: inWindow)
+        if !inWindow { show(id) }
+        return id
+    }
+
+    func entry(_ id: UUID) -> Entry? { entries[id] }
+
+    /// The window that shows the main window's sessions, and its scene (to
+    /// bring it forward from a session window).
+    private(set) var mainWindow: UUID?
+    @ObservationIgnored var mainScene: UISceneSession?
+
+    /// A list window becomes the main one if there's none: on launch, or
+    /// when the main window closed and this one is left.
+    func claimMainWindow(_ token: UUID) {
+        guard mainWindow == nil else { return }
+        mainWindow = token
+        if !listShown { shown?.connection.reveal() }
+    }
+
+    func releaseMainWindow(_ token: UUID) {
+        guard mainWindow == token else { return }
+        // Off screen until another window takes over.
+        shown?.connection.hide()
+        mainWindow = nil
+    }
+
+    /// Sessions whose window has appeared.
+    private var windowsShown: Set<UUID> = []
+
+    func windowAppeared(_ id: UUID) { windowsShown.insert(id) }
+    func hasWindow(_ id: UUID) -> Bool { windowsShown.contains(id) }
+
+    /// A session whose window didn't appear goes back to the main window.
+    func moveToMainWindow(_ id: UUID) {
+        guard var entry = entries[id], entry.inWindow else { return }
+        entry.inWindow = false
+        entries[id] = entry
         show(id)
     }
+
+    func isInWindow(_ id: UUID) -> Bool { entries[id]?.inWindow ?? false }
+
+    /// Takes a session out of the main window, for a window of its own.
+    func moveToWindow(_ id: UUID) {
+        guard var entry = entries[id], !entry.inWindow else { return }
+        if ring.current == id, !listShown { entry.connection.hide() }
+        entry.inWindow = true
+        entries[id] = entry
+        ring.close(id)
+        if !listShown { shown?.connection.reveal() }
+        if ring.ids.isEmpty { listShown = false }
+    }
+
+    /// The sessions shown in the main window, one at a time.
+    var inMainWindow: [Entry] { ring.ids.compactMap { entries[$0] } }
 
     /// Shows an open session: the one for `id`, or the last one shown.
     func show(_ id: UUID?) {
@@ -105,6 +219,7 @@ final class OpenSessions {
     /// Disconnects a session (if it's open) and shows the next one.
     func close(_ id: UUID) {
         guard let entry = entries.removeValue(forKey: id) else { return }
+        windowsShown.remove(id)
         Task { await entry.connection.disconnect() }
         ring.close(id)
         if !listShown { shown?.connection.reveal() }
@@ -117,9 +232,15 @@ struct HomeView: View {
     /// Saved computers with an open session.
     var openHosts: Set<UUID> = []
     var hasOpenSessions = false
-    var onConnected: (SavedHost?, RemoteConnection) -> Void
-    /// Back to an open session: that computer's, or nil for the last one shown.
-    var onShowOpen: (SavedHost?) -> Void = { _ in }
+    /// Sessions can have windows of their own (Mac, iPad).
+    var canOpenWindows = false
+    /// Every session gets its own window (Mac: shown as tabs).
+    var windowByDefault = false
+    /// A new session, and whether it goes in a window of its own.
+    var onConnected: (SavedHost?, RemoteConnection, Bool) -> Void
+    /// Back to an open session: that computer's, or nil for the last one
+    /// shown; true moves it to a window of its own.
+    var onShowOpen: (SavedHost?, Bool) -> Void = { _, _ in }
     /// A computer was deleted; its session, if open, goes too.
     var onDeleted: (SavedHost) -> Void = { _ in }
 
@@ -138,6 +259,7 @@ struct HomeView: View {
     struct Attempt: Equatable {
         let id = UUID()
         let host: SavedHost
+        let inWindow: Bool
     }
 
     private var connecting: UUID? { attempt?.host.id }
@@ -145,6 +267,7 @@ struct HomeView: View {
     struct AskPassword: Identifiable {
         let host: SavedHost
         let wrong: Bool
+        var inWindow = false
         var id: UUID { host.id }
     }
 
@@ -185,7 +308,7 @@ struct HomeView: View {
             .toolbar {
                 if hasOpenSessions {
                     ToolbarItem(placement: .topBarLeading) {
-                        Button("Open Sessions", systemImage: "rectangle.stack.fill") { onShowOpen(nil) }
+                        Button("Open Sessions", systemImage: "rectangle.stack.fill") { onShowOpen(nil, false) }
                             .disabled(attempt != nil)
                     }
                 }
@@ -218,7 +341,7 @@ struct HomeView: View {
                 PasswordPrompt(host: ask.host, wrong: ask.wrong) { password, remember in
                     askPassword = nil
                     if remember { library.remember(password, for: ask.host) }
-                    connect(ask.host, password: password)
+                    connect(ask.host, password: password, inWindow: ask.inWindow)
                 }
             }
             .alert(item: $failure) { failure in
@@ -285,6 +408,11 @@ struct HomeView: View {
                 .contextMenu {
                     if attempt == nil {
                         Button("Connect", systemImage: "play.fill") { start(host) }
+                        if canOpenWindows && !windowByDefault {
+                            Button("Open in New Window", systemImage: "macwindow.badge.plus") {
+                                start(host, inWindow: true)
+                            }
+                        }
                         Button("Edit", systemImage: "pencil") { editing = host }
                         if library.hasPassword(host) {
                             Button("Forget Password", systemImage: "key.slash") { library.forgetPassword(of: host) }
@@ -296,22 +424,23 @@ struct HomeView: View {
         }
     }
 
-    private func start(_ host: SavedHost) {
+    private func start(_ host: SavedHost, inWindow: Bool? = nil) {
         guard attempt == nil else { return }
+        let inWindow = inWindow ?? windowByDefault
         if openHosts.contains(host.id) {
-            onShowOpen(host)
+            onShowOpen(host, inWindow)
             return
         }
         if let password = library.password(for: host) {
-            connect(host, password: password)
+            connect(host, password: password, inWindow: inWindow)
         } else {
-            askPassword = AskPassword(host: host, wrong: false)
+            askPassword = AskPassword(host: host, wrong: false, inWindow: inWindow)
         }
     }
 
-    private func connect(_ host: SavedHost, password: String) {
+    private func connect(_ host: SavedHost, password: String, inWindow: Bool) {
         guard attempt == nil else { return }
-        let current = Attempt(host: host)
+        let current = Attempt(host: host, inWindow: inWindow)
         attempt = current
         connectTask = Task {
             let result: Result<RemoteConnection, Error>
@@ -330,9 +459,9 @@ struct HomeView: View {
             switch result {
             case .success(let connection):
                 library.markConnected(host)
-                onConnected(host, connection)
+                onConnected(host, connection, inWindow)
             case .failure(ConnectionProblem.login(.wrongPassword)):
-                askPassword = AskPassword(host: host, wrong: true)
+                askPassword = AskPassword(host: host, wrong: true, inWindow: inWindow)
             case .failure(is CancellationError):
                 break
             case .failure(let error):
@@ -360,7 +489,7 @@ struct HomeView: View {
         else { return }
         Self.autoConnected = true
         if let connection = try? await RemoteConnection.open(host: address, password: password) {
-            onConnected(nil, connection)
+            onConnected(nil, connection, windowByDefault)
         }
     }
     #endif

@@ -218,7 +218,9 @@ extension View {
     /// grows. iPhone sheets keep their detents.
     func fittedSheet(height: CGFloat) -> some View {
         // Plus room under the last footer, which the content size leaves out.
-        frame(idealHeight: height > 0 ? height + 24 : nil)
+        // Until the form is measured, a form sheet's usual height: with none
+        // the sheet can collapse before the form ever lays out.
+        frame(idealHeight: height > 0 ? height + 24 : 320)
             .presentationSizing(.form.fitted(horizontal: false, vertical: true))
     }
 }
