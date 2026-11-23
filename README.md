@@ -1,8 +1,12 @@
 # Oxide
 
-A modern, native iOS client for [RustDesk](https://rustdesk.com) hosts, written
-in Swift and SwiftUI. It works on any iPhone or iPad and was first built for
-a foldable, the iPhone Duo.
+A modern, native client for [RustDesk](https://rustdesk.com) hosts on iPhone,
+iPad and Mac, written in Swift and SwiftUI. It was first built for a foldable,
+the iPhone Duo. On the App Store it's **Oxide Remote**.
+
+**Oxide is a client only.** Every computer you control needs RustDesk installed
+and running, with direct IP access turned on (RustDesk → Settings → Security).
+Oxide connects to it directly, on your own network or over a VPN.
 
 - **Native and light.** Hardware HEVC/H.264 decoding straight to the screen, no
   web views, no cross-platform runtime.
@@ -16,6 +20,11 @@ a foldable, the iPhone Duo.
   pointer.
 - **Stays connected.** The session survives a quick trip to another app, and
   reconnects by itself when the connection drops or you come back later.
+- **Several computers at once.** Switch with a three-finger swipe, or split the
+  screen to show two at once (stacked when upright). On a Mac each computer is a
+  tab; on an iPad it can have a window of its own.
+- **Keyboards and mice.** A hardware keyboard works like one plugged into the
+  computer (physical keys, held keys), and every mouse button works.
 - **Saved computers, on all your devices.** The list syncs through iCloud, and
   passwords through iCloud Keychain (end-to-end encrypted). Without iCloud
   everything stays on the device.

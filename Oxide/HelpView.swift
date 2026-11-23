@@ -5,6 +5,17 @@ struct HelpView: View {
     var body: some View {
         List {
             Section {
+                Text("""
+                    Oxide is a client for RustDesk: it controls computers that run RustDesk, and doesn't work on its own. \
+                    Install RustDesk (free, rustdesk.com) on each computer, turn on direct IP access in its \
+                    Settings → Security, and set a password there. Then add the computer in Oxide by its address on \
+                    your network or VPN.
+                    """)
+            } header: {
+                Label("What you need", systemImage: "desktopcomputer")
+            }
+
+            Section {
                 Text("Like a laptop trackpad: your finger moves the remote pointer, wherever you touch. Best for precise work.")
                     .foregroundStyle(.secondary)
                 gesture("hand.point.up.left", "Drag one finger", "Move the pointer")
