@@ -15,8 +15,13 @@ struct HostEditor: View {
     @State private var passwordChanged = false
     @State private var error: String?
     @FocusState private var focus: Field?
+    /// The password field is UIKit's: its focus is plain state, since
+    /// `@FocusState` drops a value no SwiftUI field takes, which would take
+    /// the focus away from it again the moment it's clicked.
+    @State private var passwordFocused = false
+    @State private var formHeight: CGFloat = 0
 
-    private enum Field { case name, address, password }
+    private enum Field { case name, address }
 
     private var addressValid: Bool { HostAddress(address) != nil }
     private var hadPassword: Bool { host.map(library.hasPassword) ?? false }
@@ -36,7 +41,7 @@ struct HostEditor: View {
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                         .submitLabel(passwordKind == .permanent ? .next : .done)
-                        .onSubmit { if passwordKind == .permanent { focus = .password } }
+                        .onSubmit { if passwordKind == .permanent { passwordFocused = true } }
                 } footer: {
                     if !address.isEmpty && !addressValid {
                         Text("Use a host name or IP address, optionally with :port (1–65535).")
@@ -54,9 +59,8 @@ struct HostEditor: View {
                     .pickerStyle(.segmented)
                     if passwordKind == .permanent {
                         HostPasswordField(placeholder: hadPassword && !passwordChanged ? "Saved — type to change" : "Password",
-                                          text: $password, isFocused: Binding(
-                                            get: { focus == .password },
-                                            set: { if $0 { focus = .password } else if focus == .password { focus = nil } }))
+                                          text: $password, isFocused: $passwordFocused,
+                                          onSubmit: { passwordFocused = false })
                             .onChange(of: password) { passwordChanged = true }
                         Toggle("Remember password", isOn: $rememberPassword)
                     }
@@ -73,6 +77,9 @@ struct HostEditor: View {
                     Section { Text(error).foregroundStyle(.red) }
                 }
             }
+            .measuringHeight($formHeight)
+            // The password field goes away with One-time: its focus with it.
+            .onChange(of: passwordKind) { passwordFocused = false }
             .navigationTitle(host == nil ? "Add Computer" : "Edit Computer")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -96,6 +103,7 @@ struct HostEditor: View {
                 }
             }
         }
+        .fittedSheet(height: formHeight)
     }
 
     private func save() {
@@ -126,6 +134,9 @@ struct PasswordPrompt: View {
     @State private var password = ""
     @State private var remember = true
     @FocusState private var focused: Bool
+    /// See `HostEditor.passwordFocused`.
+    @State private var passwordFocused = false
+    @State private var formHeight: CGFloat = 0
 
     private var oneTime: Bool { host.passwordKind == .oneTime }
 
@@ -146,7 +157,7 @@ struct PasswordPrompt: View {
                             .onSubmit(connect)
                     } else {
                         HostPasswordField(placeholder: "Password", text: $password,
-                                          isFocused: Binding(get: { focused }, set: { focused = $0 }),
+                                          isFocused: $passwordFocused,
                                           onSubmit: connect)
                         Toggle("Remember password", isOn: $remember)
                     }
@@ -166,6 +177,7 @@ struct PasswordPrompt: View {
                     }
                 }
             }
+            .measuringHeight($formHeight)
             .navigationTitle(host.displayName)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -177,15 +189,36 @@ struct PasswordPrompt: View {
                         .disabled(password.isEmpty)
                 }
             }
-            .onAppear { focused = true }
+            .onAppear { if oneTime { focused = true } else { passwordFocused = true } }
         }
         .presentationDetents([.medium])
+        .fittedSheet(height: formHeight)
     }
 
     private func connect() {
         let password = oneTime ? password.trimmingCharacters(in: .whitespaces) : password
         guard !password.isEmpty else { return }
         onConnect(password, remember && !oneTime)
+    }
+}
+
+extension View {
+    /// The height of a form's content (with its insets, the navigation bar
+    /// included), for `fittedSheet`.
+    func measuringHeight(_ height: Binding<CGFloat>) -> some View {
+        onScrollGeometryChange(for: CGFloat.self) { g in
+            g.contentSize.height + g.contentInsets.top + g.contentInsets.bottom
+        } action: { _, new in
+            height.wrappedValue = new
+        }
+    }
+
+    /// A sheet as tall as its form, where sheets are free-sized (a Mac, an
+    /// iPad): a fixed form-sheet size shows a scroll bar once a section
+    /// grows. iPhone sheets keep their detents.
+    func fittedSheet(height: CGFloat) -> some View {
+        frame(idealHeight: height > 0 ? height : nil)
+            .presentationSizing(.form.fitted(horizontal: false, vertical: true))
     }
 }
 
