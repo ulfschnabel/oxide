@@ -22,6 +22,8 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.utilities</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Oxide connects to computers on your network to control them remotely.</string>
 	<key>UIApplicationSceneManifest</key>

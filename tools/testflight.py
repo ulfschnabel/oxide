@@ -1,6 +1,7 @@
 """Oxide: App Store profile, archive, upload, wait for processing, share with internal testers.
 
-Usage: testflight.py [check|profiles|all]  (uv run --with pyjwt --with cryptography)
+Usage: testflight.py [check|profiles|ios|mac|all]  (uv run --with pyjwt --with cryptography)
+  ios / mac: that platform's build; all: both.
 """
 import base64, hashlib, json, subprocess, sys, time, urllib.error, urllib.request
 from pathlib import Path
@@ -15,7 +16,18 @@ KEY_PATH = Path(LOCAL["key_path"]).expanduser()
 APP_BUNDLE = "com.ulfschnabel.duodesk"
 BUNDLES = [APP_BUNDLE]
 PROJECT = Path(__file__).resolve().parent.parent
-ARCHIVE = PROJECT / "build/Oxide.xcarchive"
+# Per platform: profile type and name, archive destination, the platform's name in builds.
+PLATFORMS = {
+    "ios": {"profile": "IOS_APP_STORE", "suffix": "AppStore", "ext": "mobileprovision",
+            "destination": "generic/platform=iOS", "asc": "IOS"},
+    "mac": {"profile": "MAC_CATALYST_APP_STORE", "suffix": "MacAppStore", "ext": "provisionprofile",
+            "destination": "generic/platform=macOS,variant=Mac Catalyst", "asc": "MAC_OS"},
+}
+
+
+def archive_path(platform):
+    return PROJECT / f"build/Oxide-{platform}.xcarchive"
+
 TESTERS = [tuple(t) for t in LOCAL["testers"]]
 EXTRA_VISIBLE_USERS = LOCAL.get("extra_visible_users", [])  # DEVELOPER-role users need per-app visibility
 GROUP = "Internal Testers"
@@ -89,13 +101,14 @@ def ensure_capabilities(bundle_id):
         log(f"capability {kind} enabled")
 
 
-def ensure_profile(bundle, cert_id):
-    """Create (or reuse) the '<bundle> AppStore' profile and install it. A
-    profile made before a capability was added lacks its entitlement: it's
-    replaced."""
+def ensure_profile(bundle, cert_id, platform):
+    """Create (or reuse) the '<bundle> AppStore' (or 'MacAppStore') profile and
+    install it. A profile made before a capability was added lacks its
+    entitlement: it's replaced."""
+    kind = PLATFORMS[platform]
     bundle_id = call("GET", f"/bundleIds?filter[identifier]={bundle}")["data"][0]["id"]
     ensure_capabilities(bundle_id)
-    name = f"{bundle} AppStore"
+    name = f"{bundle} {kind['suffix']}"
     needed = [entitlement.encode() for entitlement, _ in CAPABILITIES.values()]
     existing = []
     for p in call("GET", f"/bundleIds/{bundle_id}/profiles")["data"]:
@@ -108,13 +121,13 @@ def ensure_profile(bundle, cert_id):
             call("DELETE", f"/profiles/{p['id']}")
             log(f"profile {p['attributes']['uuid']} removed (outdated)")
     profile = existing[0] if existing else call("POST", "/profiles", {"data": {"type": "profiles",
-        "attributes": {"name": name, "profileType": "IOS_APP_STORE"},
+        "attributes": {"name": name, "profileType": kind["profile"]},
         "relationships": {"bundleId": {"data": {"type": "bundleIds", "id": bundle_id}},
                           "certificates": {"data": [{"type": "certificates", "id": cert_id}]}}}})["data"]
     attrs = profile["attributes"]
     dest = Path("~/Library/MobileDevice/Provisioning Profiles").expanduser()
     dest.mkdir(parents=True, exist_ok=True)
-    (dest / f"{attrs['uuid']}.mobileprovision").write_bytes(base64.b64decode(attrs["profileContent"]))
+    (dest / f"{attrs['uuid']}.{kind['ext']}").write_bytes(base64.b64decode(attrs["profileContent"]))
     log(f"profile '{name}' {attrs['uuid']} installed")
     return name
 
@@ -126,16 +139,21 @@ def run_logged(cmd, logfile):
         sys.exit(f"{cmd[1]} failed (rc={rc}), see {PROJECT / logfile}")
 
 
-def archive():
+def archive(platform):
     run_logged(["xcodegen", "generate", "-q"], "build-xcodegen.log")
+    # (The Mac Release build signs itself with the Mac App Store profile; see project.yml.)
     run_logged(["xcodebuild", "archive", "-project", "Oxide.xcodeproj", "-scheme", "Oxide", "-configuration", "Release",
-                "-destination", "generic/platform=iOS", "-archivePath", str(ARCHIVE), *AUTH], "build-archive.log")
-    log("archived")
+                "-destination", PLATFORMS[platform]["destination"], "-archivePath", str(archive_path(platform)),
+                *AUTH], f"build-archive-{platform}.log")
+    log(f"archived ({platform})")
 
 
-def upload(profiles):
+def upload(platform, profiles):
     entries = "".join(f"<key>{b}</key><string>{n}</string>" for b, n in profiles.items())
-    opts = PROJECT / "build/ExportOptions.plist"
+    opts = PROJECT / f"build/ExportOptions-{platform}.plist"
+    # A Mac build goes up as an installer package, signed with its own certificate.
+    installer = ("<key>installerSigningCertificate</key><string>3rd Party Mac Developer Installer</string>"
+                 if platform == "mac" else "")
     opts.write_text(f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
@@ -146,21 +164,25 @@ def upload(profiles):
 <key>signingCertificate</key><string>Apple Distribution</string>
 <key>provisioningProfiles</key><dict>{entries}</dict>
 <key>manageAppVersionAndBuildNumber</key><false/>
+{installer}
 </dict></plist>
 """)
-    run_logged(["xcodebuild", "-exportArchive", "-archivePath", str(ARCHIVE), "-exportOptionsPlist", str(opts),
-                "-exportPath", str(PROJECT / "build/export"), *AUTH], "build-upload.log")
-    log("uploaded")
+    run_logged(["xcodebuild", "-exportArchive", "-archivePath", str(archive_path(platform)), "-exportOptionsPlist",
+                str(opts), "-exportPath", str(PROJECT / f"build/export-{platform}"), *AUTH],
+               f"build-upload-{platform}.log")
+    log(f"uploaded ({platform})")
 
 
-def build_version():
+def build_version(platform):
     out = subprocess.run(["plutil", "-extract", "ApplicationProperties.CFBundleVersion", "raw",
-                          str(ARCHIVE / "Info.plist")], capture_output=True, text=True).stdout.strip()
+                          str(archive_path(platform) / "Info.plist")], capture_output=True, text=True).stdout.strip()
     return out or "1"
 
 
-def processed_build(app_id, version):
-    data = call("GET", f"/builds?filter[app]={app_id}&filter[version]={version}&limit=5")["data"]
+def processed_build(app_id, version, platform):
+    asc = PLATFORMS[platform]["asc"]
+    data = call("GET", f"/builds?filter[app]={app_id}&filter[version]={version}"
+                       f"&filter[preReleaseVersion.platform]={asc}&limit=5")["data"]
     for b in data:
         state = b["attributes"]["processingState"]
         log(f"build {b['id']} state={state}")
@@ -210,18 +232,26 @@ def main():
         ids = call("GET", f"/bundleIds?filter[identifier]={APP_BUNDLE}")["data"]
         print("app:", [a["id"] for a in apps], "bundleId:", [b["id"] for b in ids])
         return
+    arg = sys.argv[1] if len(sys.argv) > 1 else "all"
+    choices = {"ios": ["ios"], "mac": ["mac"], "all": ["ios", "mac"], "profiles": ["ios", "mac"]}
+    if arg not in choices:
+        sys.exit(f"unknown argument {arg!r}: use check, profiles, ios, mac or all")
+    platforms = choices[arg]
     cert_id = distribution_cert_id()
-    profiles = {b: ensure_profile(b, cert_id) for b in BUNDLES}
-    if sys.argv[1:] == ["profiles"]:
+    profiles = {p: {b: ensure_profile(b, cert_id, p) for b in BUNDLES} for p in platforms}
+    if arg == "profiles":
         return
     app_id = call("GET", f"/apps?filter[bundleId]={APP_BUNDLE}")["data"][0]["id"]
-    archive()
-    upload(profiles)
-    version = build_version()
-    build_id = wait_for("processing", lambda: processed_build(app_id, version), timeout=5400, every=60)
-    group_id = share(app_id, build_id)
-    log(f"DONE app={app_id} build={build_id} ({version}) group={group_id}")
-
+    # One platform start to finish, then the next: a failure leaves no
+    # uploaded build unshared.
+    for platform in platforms:
+        archive(platform)
+        upload(platform, profiles[platform])
+        version = build_version(platform)
+        build_id = wait_for(f"processing ({platform})", lambda: processed_build(app_id, version, platform),
+                            timeout=5400, every=60)
+        group_id = share(app_id, build_id)
+        log(f"DONE {platform} app={app_id} build={build_id} ({version}) group={group_id}")
 
 if __name__ == "__main__":
     main()
