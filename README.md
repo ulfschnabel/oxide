@@ -6,7 +6,10 @@ the iPhone Duo. On the App Store it's **Oxide Remote**.
 
 **Oxide is a client only.** Every computer you control needs RustDesk installed
 and running, with direct IP access turned on (RustDesk → Settings → Security).
-Oxide connects to it directly, on your own network or over a VPN.
+Oxide connects to it directly, on your own network or over a VPN. To try Oxide
+first, open the **Demo Computer** at the bottom of the list: a RustDesk host
+built into the app (over an in-memory link, no network) whose screen shows
+your clicks, drawing and typing.
 
 - **Native and light.** Hardware HEVC/H.264 decoding straight to the screen, no
   web views, no cross-platform runtime.

@@ -114,20 +114,35 @@ final class RemoteConnection {
         return connection
     }
 
-    /// One TCP connection and login, as a new session generation.
+    /// The demo computer, for its address: kept for the whole session, so
+    /// its desktop survives a reconnect.
+    @ObservationIgnored private let demoHost = DemoHost()
+
+    /// One TCP connection (or the link to the demo computer) and login, as a
+    /// new session generation.
     private func attach() async throws {
-        guard let address = HostAddress(host) else { throw ConnectionProblem.invalidAddress }
-        note("connect \(address.host):\(address.port)")
-        let transport = TCPTransport(host: address.host, port: address.port)
-        do {
-            try await transport.connect()
-        } catch is CancellationError {
-            throw CancellationError()
-        } catch {
-            note("connect failed: \(error.localizedDescription)")
-            throw ConnectionProblem(error)
+        let transport: Transport
+        if host == DemoHost.address {
+            note("connect to the demo computer")
+            let (client, end) = DemoLink.pair()
+            let demo = demoHost
+            Task { await demo.serve(end) }
+            transport = client
+        } else {
+            guard let address = HostAddress(host) else { throw ConnectionProblem.invalidAddress }
+            note("connect \(address.host):\(address.port)")
+            let tcp = TCPTransport(host: address.host, port: address.port)
+            do {
+                try await tcp.connect()
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                note("connect failed: \(error.localizedDescription)")
+                throw ConnectionProblem(error)
+            }
+            note("tcp connected, logging in")
+            transport = tcp
         }
-        note("tcp connected, logging in")
         let session = Session(transport: transport, host: host, password: password,
                               clientName: UIDevice.current.name, sessionID: sessionID)
         generation += 1

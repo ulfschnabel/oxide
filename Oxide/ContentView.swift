@@ -8,6 +8,7 @@ struct ContentView: View {
     let open: OpenSessions
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.dismissWindow) private var dismissWindow
     /// This window's claim on showing the main window's sessions: only one
     /// window may (iPadOS lets the user make more of them).
     @State private var token = UUID()
@@ -70,7 +71,22 @@ struct ContentView: View {
             }
         }
         .background(SceneReader { if isMain { open.mainScene = $0 } })
-        .onAppear { open.claimMainWindow(token) }
+        .onAppear {
+            open.claimMainWindow(token)
+            #if targetEnvironment(macCatalyst)
+            // One list on a Mac: another (restored from an earlier run, or
+            // a window's New Tab) closes, and the list comes forward.
+            // Unless the main list's window is gone without saying so: then
+            // this one takes over. (Not yet known at launch: it closes.)
+            if !isMain {
+                if let main = open.mainScene, !UIApplication.shared.openSessions.contains(main) {
+                    open.takeMainWindow(token)
+                } else {
+                    dismissWindow()
+                }
+            }
+            #endif
+        }
         .onChange(of: open.mainWindow) { _, main in
             if main == nil { open.claimMainWindow(token) }
         }
@@ -475,6 +491,10 @@ struct HomeView: View {
         } actions: {
             Button("Add Computer") { adding = true }
                 .buttonStyle(.glassProminent)
+            // Try Oxide before setting RustDesk up anywhere.
+            Button("Try the Demo Computer") { start(.demo) }
+                .buttonStyle(.glass)
+                .disabled(attempt != nil)
         }
     }
 
@@ -514,6 +534,25 @@ struct HomeView: View {
                     }
                 }
             }
+            Section {
+                Button {
+                    start(.demo)
+                } label: {
+                    HostRow(host: .demo, connecting: connecting == SavedHost.demo.id,
+                            open: openHosts.contains(SavedHost.demo.id), hasPassword: true)
+                }
+                .disabled(connecting != nil && connecting != SavedHost.demo.id)
+                .contextMenu {
+                    if attempt == nil, canOpenWindows && !windowByDefault {
+                        Button("Connect", systemImage: "play.fill") { start(.demo) }
+                        Button("Open in New Window", systemImage: "macwindow.badge.plus") {
+                            start(.demo, inWindow: true)
+                        }
+                    }
+                }
+            } footer: {
+                Text("Part of the app, to try Oxide out. Real computers need RustDesk.")
+            }
         }
     }
 
@@ -524,7 +563,9 @@ struct HomeView: View {
             onShowOpen(host, inWindow)
             return
         }
-        if let password = library.password(for: host) {
+        if host.isDemo {
+            connect(host, password: DemoHost.password, inWindow: inWindow)
+        } else if let password = library.password(for: host) {
             connect(host, password: password, inWindow: inWindow)
         } else {
             askPassword = AskPassword(host: host, wrong: false, inWindow: inWindow)
@@ -551,7 +592,7 @@ struct HomeView: View {
             connectTask = nil
             switch result {
             case .success(let connection):
-                library.markConnected(host)
+                if !host.isDemo { library.markConnected(host) }
                 onConnected(host, connection, inWindow)
             case .failure(ConnectionProblem.login(.wrongPassword)):
                 askPassword = AskPassword(host: host, wrong: true, inWindow: inWindow)
@@ -596,14 +637,15 @@ private struct HostRow: View {
 
     var body: some View {
         HStack(spacing: 14) {
-            Image(systemName: "desktopcomputer")
+            Image(systemName: host.isDemo ? "sparkles.rectangle.stack" : "desktopcomputer")
                 .font(.title2)
                 .foregroundStyle(.tint)
                 .frame(width: 36)
             VStack(alignment: .leading, spacing: 2) {
                 // Explicit colours: a list button would tint its label.
                 Text(host.displayName).font(.headline).foregroundStyle(Color.primary)
-                Text(host.address).font(.subheadline).foregroundStyle(Color.secondary)
+                Text(host.isDemo ? "Built in, no setup" : host.address)
+                    .font(.subheadline).foregroundStyle(Color.secondary)
                 if let last = host.lastConnected {
                     Text("Last connected \(last, format: .relative(presentation: .named))")
                         .font(.caption).foregroundStyle(Color.secondary.opacity(0.7))

@@ -9,7 +9,7 @@ struct HelpView: View {
                     Oxide is a client for RustDesk: it controls computers that run RustDesk, and doesn't work on its own. \
                     Install RustDesk (free, rustdesk.com) on each computer, turn on direct IP access in its \
                     Settings → Security, and set a password there. Then add the computer in Oxide by its address on \
-                    your network or VPN.
+                    your network or VPN. To try Oxide first, open the Demo Computer at the bottom of the list.
                     """)
             } header: {
                 Label("What you need", systemImage: "desktopcomputer")

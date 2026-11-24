@@ -115,14 +115,25 @@ private struct WindowHook: UIViewRepresentable {
     }
 
     final class HookView: UIView {
-        var title = "" { didSet { window?.windowScene?.title = title } }
+        var title = "" {
+            didSet { if title != oldValue { showTitle() } }
+        }
         var onClosed: (() -> Void)?
         private weak var watchedScene: UIScene?
+        /// While the Mac window is being looked for, its title is a marker
+        /// that nothing else may overwrite.
+        private var marker: String?
+        private weak var joinedWindow: UIWindow?
+
+        private func showTitle() {
+            guard marker == nil, let scene = window?.windowScene else { return }
+            scene.title = title
+        }
 
         override func didMoveToWindow() {
             super.didMoveToWindow()
             guard let window, let scene = window.windowScene else { return }
-            scene.title = title
+            showTitle()
             if watchedScene !== scene {
                 if let watchedScene {
                     NotificationCenter.default.removeObserver(self, name: UIScene.didDisconnectNotification,
@@ -133,7 +144,18 @@ private struct WindowHook: UIViewRepresentable {
                                                        name: UIScene.didDisconnectNotification, object: scene)
             }
             #if targetEnvironment(macCatalyst)
-            MacTabs.join(window)
+            // Once per window: a newer search replaces an older one.
+            guard joinedWindow !== window else { return }
+            joinedWindow = window
+            let marker = "oxide-tab-\(UUID().uuidString)"
+            self.marker = marker
+            scene.title = marker
+            MacTabs.find(marker) { [weak self] found in
+                guard let self, self.marker == marker else { return }
+                self.marker = nil
+                self.showTitle()
+                if let found { MacTabs.tab(found) }
+            }
             #endif
         }
 
@@ -146,21 +168,29 @@ private struct WindowHook: UIViewRepresentable {
 
 #if targetEnvironment(macCatalyst)
 /// Session windows as macOS window tabs. Mac Catalyst has no API for this;
-/// AppKit's public NSWindow tabbing methods are reached at run time, and
-/// every step is skipped if something isn't there.
+/// AppKit's public NSWindow methods are reached at run time, and every step
+/// is skipped if something isn't there. To find its NSWindow, the window
+/// takes a unique title for a moment (AppKit shows the scene's title).
 @MainActor
 enum MacTabs {
     static let identifier = "com.ulfschnabel.duodesk.session"
 
-    /// Tabs `window` onto another session window once AppKit has created its
-    /// NSWindow (a moment after the scene appears).
-    static func join(_ window: UIWindow, attempt: Int = 0) {
-        guard let mine = nsWindow(for: window) else {
-            if attempt < 20 {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { join(window, attempt: attempt + 1) }
+    /// The NSWindow showing `marker` as its title, once AppKit has made it
+    /// (a moment after the scene appears); nil after two seconds.
+    static func find(_ marker: String, attempt: Int = 0, then done: @escaping (NSObject?) -> Void) {
+        if let found = allWindows().first(where: { ($0.value(forKey: "title") as? String) == marker }) {
+            done(found)
+        } else if attempt < 40 {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                find(marker, attempt: attempt + 1, then: done)
             }
-            return
+        } else {
+            done(nil)
         }
+    }
+
+    /// Tabs a session window onto another visible one.
+    static func tab(_ mine: NSObject) {
         mine.setValue(identifier, forKey: "tabbingIdentifier")
         mine.setValue(1, forKey: "tabbingMode")  // NSWindowTabbingModePreferred
         guard let other = sessionWindows().first(where: { $0 !== mine && isVisible($0) }),
@@ -180,13 +210,6 @@ enum MacTabs {
               let windows = app.value(forKey: "windows") as? [NSObject]
         else { return [] }
         return windows
-    }
-
-    private static func nsWindow(for window: UIWindow) -> NSObject? {
-        let key = NSSelectorFromString("uiWindows")
-        return allWindows().first { ns in
-            ns.responds(to: key) && (ns.value(forKey: "uiWindows") as? [UIWindow])?.contains(window) == true
-        }
     }
 
     private static func sessionWindows() -> [NSObject] {

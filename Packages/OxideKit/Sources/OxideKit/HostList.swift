@@ -11,6 +11,15 @@ public enum PasswordKind: String, Codable, Sendable, CaseIterable {
 
 /// A computer the user saved. Its password is kept in the Keychain under
 /// `id`, never here.
+extension SavedHost {
+    /// The demo computer inside the app: always in the list, never saved or synced.
+    public static let demo = SavedHost(
+        id: UUID(uuidString: "0E1D0E70-0000-4000-8000-00000000DE70")!, name: "Demo Computer",
+        address: DemoHost.address, passwordKind: .permanent, createdAt: Date(timeIntervalSince1970: 0))
+
+    public var isDemo: Bool { id == Self.demo.id }
+}
+
 public struct SavedHost: Codable, Identifiable, Equatable, Sendable {
     public let id: UUID
     public var name: String

@@ -11,7 +11,7 @@ public struct HostAddress: Equatable, Sendable {
         self.port = port
     }
 
-    /// Nil for an empty host or a port that isn't 1–65535.
+    /// Nil for an empty host, one with a space, or a port that isn't 1–65535.
     public init?(_ text: String) {
         let s = text.trimmingCharacters(in: .whitespaces)
         var host = s
@@ -26,7 +26,8 @@ public struct HostAddress: Equatable, Sendable {
             portText = String(s[s.index(after: colon)...])
         }
         // More than one colon without brackets: a bare IPv6 address.
-        guard !host.isEmpty else { return nil }
+        // No host name or IP address has whitespace inside.
+        guard !host.isEmpty, !host.contains(where: \.isWhitespace) else { return nil }
         if portText.isEmpty {
             port = TCPTransport.defaultPort
         } else {
