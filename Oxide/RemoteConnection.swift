@@ -239,6 +239,9 @@ final class RemoteConnection {
             terminalProblem = nil
             awaitingKeyFrame = true
             finishLogin(.success(()))
+            #if DEBUG
+            if host == DemoHost.address, UserDefaults.standard.bool(forKey: "demoSample") { playDemoSample() }
+            #endif
             if inBackground {
                 // Came back up while away (a network change): don't hold it.
                 pause(because: "logged in while in the background")
@@ -660,6 +663,35 @@ final class RemoteConnection {
         guard peer.displays.indices.contains(i) else { return DisplayRect(x: 0, y: 0, width: 1920, height: 1080) }
         return DisplayRect(peer.displays[i])
     }
+
+    #if DEBUG
+    /// For App Store screenshots (`-demoSample YES`): once the resolution
+    /// has settled, draws a curve, marks two right-clicks and types a line
+    /// on the demo computer, through the normal input path.
+    private func playDemoSample() {
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(3))
+            let d = input.display
+            func at(_ fx: Double, _ fy: Double) -> (Int32, Int32) {
+                (Int32(Double(d.x) + fx * Double(d.width)), Int32(Double(d.y) + fy * Double(d.height)))
+            }
+            var drawing: [Hbb_Message] = []
+            let start = at(0.12, 0.78)
+            drawing.append(Input.move(start.0, start.1))
+            drawing.append(Input.button(.left, down: true))
+            for i in 0...60 {
+                let t = Double(i) / 60
+                let p = at(0.12 + 0.76 * t, 0.78 - 0.1 * sin(t * 2 * .pi * 1.5))
+                drawing.append(Input.move(p.0, p.1))
+            }
+            drawing.append(Input.button(.left, down: false))
+            send(drawing)
+            send(Input.click(.right, at: at(0.3, 0.62)))
+            send(Input.click(.right, at: at(0.7, 0.9)))
+            send([Input.typed("Hello from Oxide!")])
+        }
+    }
+    #endif
 
     /// Input goes through one queue so the host gets it in order (a move
     /// before the click it positions). Without a live session it's dropped.
