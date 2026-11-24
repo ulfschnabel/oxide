@@ -62,6 +62,8 @@ enum SettingsKey {
     static let keyboardMode = "keyboardMode"
     /// Seconds a session stays up in the background; 0 pauses it at once.
     static let backgroundGrace = "backgroundGrace"
+    /// The built-in demo computer is in the Computers list.
+    static let showDemo = "showDemo"
 
     static func register() {
         UserDefaults.standard.register(defaults: [
@@ -72,6 +74,7 @@ enum SettingsKey {
             scrollSpeed: 2.0,
             keyboardMode: KeyboardMode.keys.rawValue,
             backgroundGrace: 30.0,
+            showDemo: true,
         ])
     }
 }
@@ -84,6 +87,7 @@ struct SettingsView: View {
     @AppStorage(SettingsKey.scrollSpeed) private var scrollSpeed = 2.0
     @AppStorage(SettingsKey.backgroundGrace) private var backgroundGrace = 30.0
     @AppStorage(SettingsKey.keyboardMode) private var keyboardMode: KeyboardMode = .keys
+    @AppStorage(SettingsKey.showDemo) private var showDemo = true
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -144,6 +148,12 @@ struct SettingsView: View {
                         How long the session stays up while you're in another app. After that it pauses, \
                         and reconnects when you come back. iOS allows about 30 seconds.
                         """)
+                }
+
+                Section {
+                    Toggle("Show Demo Computer", isOn: $showDemo)
+                } footer: {
+                    Text("The demo computer is built into Oxide, to try it out without RustDesk.")
                 }
 
                 Section {

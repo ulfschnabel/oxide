@@ -364,6 +364,7 @@ struct HomeView: View {
     @State private var askPassword: AskPassword?
     @State private var failure: Failure?
     @State private var deleting: SavedHost?
+    @AppStorage(SettingsKey.showDemo) private var showDemo = true
 
     struct Attempt: Equatable {
         let id = UUID()
@@ -492,9 +493,11 @@ struct HomeView: View {
             Button("Add Computer") { adding = true }
                 .buttonStyle(.glassProminent)
             // Try Oxide before setting RustDesk up anywhere.
-            Button("Try the Demo Computer") { start(.demo) }
-                .buttonStyle(.glass)
-                .disabled(attempt != nil)
+            if showDemo {
+                Button("Try the Demo Computer") { start(.demo) }
+                    .buttonStyle(.glass)
+                    .disabled(attempt != nil)
+            }
         }
     }
 
@@ -534,25 +537,30 @@ struct HomeView: View {
                     }
                 }
             }
-            Section {
-                Button {
-                    start(.demo)
-                } label: {
-                    HostRow(host: .demo, connecting: connecting == SavedHost.demo.id,
-                            open: openHosts.contains(SavedHost.demo.id), hasPassword: true)
-                }
-                .disabled(connecting != nil && connecting != SavedHost.demo.id)
-                .contextMenu {
-                    if attempt == nil, canOpenWindows && !windowByDefault {
-                        Button("Connect", systemImage: "play.fill") { start(.demo) }
-                        Button("Open in New Window", systemImage: "macwindow.badge.plus") {
-                            start(.demo, inWindow: true)
-                        }
+            if showDemo { demoSection }
+        }
+    }
+
+    private var demoSection: some View {
+        Section {
+            Button {
+                start(.demo)
+            } label: {
+                HostRow(host: .demo, connecting: connecting == SavedHost.demo.id,
+                        open: openHosts.contains(SavedHost.demo.id), hasPassword: true)
+            }
+            .disabled(connecting != nil && connecting != SavedHost.demo.id)
+            .contextMenu {
+                if attempt == nil, canOpenWindows && !windowByDefault {
+                    Button("Connect", systemImage: "play.fill") { start(.demo) }
+                    Button("Open in New Window", systemImage: "macwindow.badge.plus") {
+                        start(.demo, inWindow: true)
                     }
                 }
-            } footer: {
-                Text("Part of the app, to try Oxide out. Real computers need RustDesk.")
             }
+        } footer: {
+            Text("Part of the app, to try Oxide out. Real computers need RustDesk. "
+                 + "You can hide it in Settings.")
         }
     }
 
